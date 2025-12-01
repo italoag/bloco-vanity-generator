@@ -1,4 +1,4 @@
-module bloco-eth
+module bloco-vanity-generator
 
 go 1.24.3
 
