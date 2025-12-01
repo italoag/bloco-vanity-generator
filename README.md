@@ -1,5 +1,10 @@
 # Bloco Vanity Generator
 
+[![CI](https://github.com/italoag/bloco-vanity-generator/workflows/CI/badge.svg)](https://github.com/italoag/bloco-vanity-generator/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/italoag/bloco-vanity-generator)](https://goreportcard.com/report/github.com/italoag/bloco-vanity-generator)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/badge/Go-1.24.3+-blue.svg)](https://golang.org)
+
 A high-performance CLI tool for generating Vanity Ethereum address with custom prefixes and suffixes, built in Go with automatic wallet logging and EIP-55 checksum support.
 
 ## Features
@@ -35,14 +40,14 @@ A high-performance CLI tool for generating Vanity Ethereum address with custom p
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd bloco-ethereum-generator
+cd bloco-vanity-generator
 
 # Initialize Go module and download dependencies
-go mod init bloco-eth
+go mod init bloco-vanity-generator
 go mod tidy
 
 # Build the application
-go build -o bloco-eth main.go
+go build -o bloco-vanity-generator main.go
 
 # (Optional) Install globally
 go install
@@ -106,84 +111,84 @@ make build-all
 
 ```bash
 # Generate a wallet with prefix 'abc' (includes keystore files by default)
-./bloco-eth --prefix abc
+./bloco-vanity-generator --prefix abc
 
 # Generate a wallet with suffix '123'
-./bloco-eth --suffix 123
+./bloco-vanity-generator --suffix 123
 
 # Generate a wallet with both prefix and suffix
-./bloco-eth --prefix abc --suffix 123
+./bloco-vanity-generator --prefix abc --suffix 123
 
 # Generate 5 wallets with prefix 'dead' (4 chars - use with caution!)
-./bloco-eth --prefix dead --count 5
+./bloco-vanity-generator --prefix dead --count 5
 
 # Generate with checksum validation (case-sensitive) - use shorter patterns
-./bloco-eth --prefix ABC --checksum
+./bloco-vanity-generator --prefix ABC --checksum
 
 # Show detailed progress during generation (4 chars max recommended)
-./bloco-eth --prefix abcd --progress --count 5
+./bloco-vanity-generator --prefix abcd --progress --count 5
 
 # NEW: Use specific number of threads for parallel processing
-./bloco-eth --prefix abc --threads 8
+./bloco-vanity-generator --prefix abc --threads 8
 
 # NEW: Auto-detect and use all CPU cores (default behavior)
-./bloco-eth --prefix abc --threads 0
+./bloco-vanity-generator --prefix abc --threads 0
 
 # NEW: Generate without keystore files
-./bloco-eth --prefix abc --no-keystore
+./bloco-vanity-generator --prefix abc --no-keystore
 
 # NEW: Specify custom keystore directory
-./bloco-eth --prefix abc --keystore-dir ./my-keys
+./bloco-vanity-generator --prefix abc --keystore-dir ./my-keys
 
 # NEW: Use PBKDF2 instead of scrypt for keystore encryption
-./bloco-eth --prefix abc --keystore-kdf pbkdf2
+./bloco-vanity-generator --prefix abc --keystore-kdf pbkdf2
 
 # NEW: Generate with custom keystore settings
-./bloco-eth --prefix abc --keystore-dir ./secure-keys --keystore-kdf scrypt --count 3
+./bloco-vanity-generator --prefix abc --keystore-dir ./secure-keys --keystore-kdf scrypt --count 3
 
 # NEW: Generate vanity wallet using mnemonic phrases instead of raw private keys
-./bloco-eth --prefix abc --with-mnemonic
+./bloco-vanity-generator --prefix abc --with-mnemonic
 
 # NEW: Generate with security analysis
-./bloco-eth --prefix abc --kdf-analysis --security-level production
+./bloco-vanity-generator --prefix abc --kdf-analysis --security-level production
 
 # NEW: Generate with custom KDF parameters
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{"c":600000,"prf":"hmac-sha256","dklen":32}'
+./bloco-vanity-generator --prefix abc --keystore-kdf pbkdf2 --kdf-params '{"c":600000,"prf":"hmac-sha256","dklen":32}'
 
 # NEW: Generate optimized for specific client
-./bloco-eth --prefix abc --optimize-for geth --security-level high
+./bloco-vanity-generator --prefix abc --optimize-for geth --security-level high
 ```
 
 #### Analyze Pattern Difficulty
 
 ```bash
 # Analyze difficulty for a specific pattern
-./bloco-eth stats --prefix abc --suffix 123
+./bloco-vanity-generator stats --prefix abc --suffix 123
 
 # Analyze with checksum validation
-./bloco-eth stats --prefix ABC --checksum
+./bloco-vanity-generator stats --prefix ABC --checksum
 
 # Check difficulty for just a prefix (safe length)
-./bloco-eth stats --prefix dead
+./bloco-vanity-generator stats --prefix dead
 ```
 
 #### Performance Benchmarking
 
 ```bash
 # Run benchmark with default settings (10,000 attempts)
-./bloco-eth benchmark
+./bloco-vanity-generator benchmark
 
 # Custom benchmark with specific pattern
-./bloco-eth benchmark --attempts 50000 --pattern "fffff"
+./bloco-vanity-generator benchmark --attempts 50000 --pattern "fffff"
 
 # Benchmark with checksum validation
-./bloco-eth benchmark --attempts 25000 --pattern "ABC" --checksum
+./bloco-vanity-generator benchmark --attempts 25000 --pattern "ABC" --checksum
 
 # Multi-threaded benchmark with specific thread count
-./bloco-eth benchmark --attempts 50000 --pattern "abc" --threads 8
+./bloco-vanity-generator benchmark --attempts 50000 --pattern "abc" --threads 8
 
 # Auto-detect and use all CPU cores for benchmark
-./bloco-eth benchmark --attempts 50000 --pattern "abc" --threads 0
+./bloco-vanity-generator benchmark --attempts 50000 --pattern "abc" --threads 0
 ```
 
 ### Command Line Options
@@ -236,24 +241,24 @@ The Universal KDF system provides advanced key derivation with comprehensive com
 
 ```bash
 # Generate with default high-security scrypt
-./bloco-eth --prefix abc
+./bloco-vanity-generator --prefix abc
 
 # Use PBKDF2 for faster generation
-./bloco-eth --prefix abc --keystore-kdf pbkdf2
+./bloco-vanity-generator --prefix abc --keystore-kdf pbkdf2
 
 # Use security presets
-./bloco-eth --prefix abc --security-level enterprise
-./bloco-eth --prefix abc --security-level development
+./bloco-vanity-generator --prefix abc --security-level enterprise
+./bloco-vanity-generator --prefix abc --security-level development
 
 # Show compatibility analysis
-./bloco-eth --prefix abc --kdf-analysis
+./bloco-vanity-generator --prefix abc --kdf-analysis
 ```
 
 #### Custom KDF Parameters
 
 ```bash
 # Custom scrypt parameters
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vanity-generator --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -261,7 +266,7 @@ The Universal KDF system provides advanced key derivation with comprehensive com
 }'
 
 # Custom PBKDF2 parameters
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vanity-generator --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 600000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -290,7 +295,7 @@ The Universal KDF system ensures compatibility with major Ethereum clients:
 #### Compatibility Analysis Example
 
 ```bash
-./bloco-eth --prefix abc --kdf-analysis
+./bloco-vanity-generator --prefix abc --kdf-analysis
 ```
 
 Output:
@@ -322,7 +327,7 @@ Recommendations:
 The Fang integration provides beautifully formatted help text:
 
 ```bash
-./bloco-eth --help
+./bloco-vanity-generator --help
 ```
 
 Output shows enhanced formatting with clear sections:
@@ -350,30 +355,30 @@ Output shows enhanced formatting with clear sections:
          
   USAGE  
          
-    bloco-eth [command] [--flags]                                
+    bloco-vanity-generator [command] [--flags]                                
                                                                  
   EXAMPLES  
             
     # Generate a single wallet with prefix 'abc'                 
-    bloco-eth --prefix abc                                       
+    bloco-vanity-generator --prefix abc                                       
                                                                  
     # Generate 5 wallets with prefix 'dead' and suffix 'beef'    
-    bloco-eth --prefix dead --suffix beef --count 5              
+    bloco-vanity-generator --prefix dead --suffix beef --count 5              
                                                                  
     # Generate with checksum validation (case-sensitive)         
-    bloco-eth --prefix DeAdBeEf --checksum --count 1             
+    bloco-vanity-generator --prefix DeAdBeEf --checksum --count 1             
                                                                  
     # Show progress for moderate difficulty generation                  
-    bloco-eth --prefix abcd --progress                         
+    bloco-vanity-generator --prefix abcd --progress                         
                                                                  
     # Use specific number of threads                             
-    bloco-eth --prefix abc --threads 8                           
+    bloco-vanity-generator --prefix abc --threads 8                           
                                                                  
     # Generate multiple wallets with progress tracking           
-    bloco-eth --prefix cafe --count 3 --progress  
+    bloco-vanity-generator --prefix cafe --count 3 --progress  
                                                                  
     # Complex pattern with checksum (use short patterns!)                              
-    bloco-eth --prefix 1337 --checksum --progress  
+    bloco-vanity-generator --prefix 1337 --checksum --progress  
 ```
 
 ### Signal Handling Demo
@@ -382,7 +387,7 @@ The application now supports graceful interruption:
 
 ```bash
 # Start a moderately long operation (safe for testing)
-./bloco-eth --prefix abcd --count 5 --progress
+./bloco-vanity-generator --prefix abcd --count 5 --progress
 
 # Press Ctrl+C to gracefully stop
 # The application will:
@@ -397,7 +402,7 @@ The application now supports graceful interruption:
 ### Generate a Simple Bloco Wallet
 
 ```bash
-./bloco-eth --prefix cafe --suffix beef --progress --threads 8
+./bloco-vanity-generator --prefix cafe --suffix beef --progress --threads 8
 ```
 
 Output:
@@ -455,16 +460,16 @@ The tool automatically generates encrypted KeyStore V3 JSON files for each walle
 
 ```bash
 # Generate wallet with keystore files (default behavior)
-./bloco-eth --prefix abc
+./bloco-vanity-generator --prefix abc
 
 # Custom keystore directory
-./bloco-eth --prefix abc --keystore-dir ./my-secure-keys
+./bloco-vanity-generator --prefix abc --keystore-dir ./my-secure-keys
 
 # Use PBKDF2 instead of scrypt (faster but less secure)
-./bloco-eth --prefix abc --keystore-kdf pbkdf2
+./bloco-vanity-generator --prefix abc --keystore-kdf pbkdf2
 
 # Disable keystore generation
-./bloco-eth --prefix abc --no-keystore
+./bloco-vanity-generator --prefix abc --no-keystore
 ```
 
 #### KeyStore File Structure
@@ -525,22 +530,22 @@ The secure logging system provides comprehensive operational logging without exp
 
 ```bash
 # Basic secure logging (default: INFO level to stdout)
-./bloco-eth --prefix abc
+./bloco-vanity-generator --prefix abc
 
 # Debug logging to file for troubleshooting
-./bloco-eth --prefix abc --log-level debug --log-file ./operations.log
+./bloco-vanity-generator --prefix abc --log-level debug --log-file ./operations.log
 
 # JSON format logging for structured analysis
-./bloco-eth --prefix abc --log-format json --log-file ./operations.json
+./bloco-vanity-generator --prefix abc --log-format json --log-file ./operations.json
 
 # Disable logging completely for maximum performance
-./bloco-eth --prefix abc --no-logging
+./bloco-vanity-generator --prefix abc --no-logging
 
 # Custom log rotation settings
-./bloco-eth --prefix abc --log-max-size 50MB --log-max-files 10
+./bloco-vanity-generator --prefix abc --log-max-size 50MB --log-max-files 10
 
 # Structured text format with custom buffer size
-./bloco-eth --prefix abc --log-format structured --log-buffer-size 2000
+./bloco-vanity-generator --prefix abc --log-format structured --log-buffer-size 2000
 ```
 
 #### What Gets Logged (Safe Data Only)
@@ -620,7 +625,7 @@ After upgrading, verify that new logs contain only safe data:
 
 ```bash
 # Generate a test wallet with logging
-./bloco-eth --prefix abc --log-level debug --log-file ./test-secure.log
+./bloco-vanity-generator --prefix abc --log-level debug --log-file ./test-secure.log
 
 # Verify no sensitive data is logged
 grep -i "private\|public\|key\|0x[a-fA-F0-9]{64}" ./test-secure.log
@@ -637,7 +642,7 @@ grep -i "private\|public\|key\|0x[a-fA-F0-9]{64}" ./test-secure.log
 ### Difficulty Analysis
 
 ```bash
-./bloco-eth stats --prefix deadbeef
+./bloco-vanity-generator stats --prefix deadbeef
 ```
 
 Output:
@@ -675,7 +680,7 @@ Recommendations:
 The benchmark command now features improved help text and examples:
 
 ```bash
-./bloco-eth benchmark --help
+./bloco-vanity-generator benchmark --help
 ```
 
 Shows comprehensive examples and usage patterns:
@@ -683,28 +688,28 @@ Shows comprehensive examples and usage patterns:
   EXAMPLES  
             
     # Basic benchmark with default pattern 'abc'                            
-    bloco-eth benchmark                                                     
+    bloco-vanity-generator benchmark                                                     
                                                                             
     # Benchmark with specific number of attempts                            
-    bloco-eth benchmark --attempts 50000                                    
+    bloco-vanity-generator benchmark --attempts 50000                                    
                                                                             
     # Benchmark with custom pattern (safe length)                                         
-    bloco-eth benchmark --pattern dead --attempts 25000                 
+    bloco-vanity-generator benchmark --pattern dead --attempts 25000                 
                                                                             
     # Benchmark with checksum validation (more CPU intensive)               
-    bloco-eth benchmark --pattern ABC --checksum --attempts 10000        
+    bloco-vanity-generator benchmark --pattern ABC --checksum --attempts 10000        
                                                                             
     # Benchmark with specific thread count                                  
-    bloco-eth benchmark --threads 8 --attempts 20000                        
+    bloco-vanity-generator benchmark --threads 8 --attempts 20000                        
                                                                             
     # Intensive benchmark for performance analysis                          
-    bloco-eth benchmark --pattern cafe --attempts 100000 --threads 4  
+    bloco-vanity-generator benchmark --pattern cafe --attempts 100000 --threads 4  
 ```
 
 ### Performance Benchmark
 
 ```bash
-./bloco-eth benchmark --attempts 25000 --pattern "abc" --threads 8
+./bloco-vanity-generator benchmark --attempts 25000 --pattern "abc" --threads 8
 ```
 
 Output:
@@ -749,30 +754,30 @@ For detailed information about KDF configuration and troubleshooting:
 
 ```bash
 # High security (recommended for production)
-./bloco-eth --prefix abc --security-level production
+./bloco-vanity-generator --prefix abc --security-level production
 
 # Fast generation (development only)
-./bloco-eth --prefix abc --security-level development
+./bloco-vanity-generator --prefix abc --security-level development
 
 # Maximum security (enterprise)
-./bloco-eth --prefix abc --security-level enterprise
+./bloco-vanity-generator --prefix abc --security-level enterprise
 
 # Client-specific optimization
-./bloco-eth --prefix abc --optimize-for geth
-./bloco-eth --prefix abc --optimize-for anvil
+./bloco-vanity-generator --prefix abc --optimize-for geth
+./bloco-vanity-generator --prefix abc --optimize-for anvil
 ```
 
 #### Troubleshooting Commands
 
 ```bash
 # Analyze existing keystore
-./bloco-eth --analyze-keystore ./keystores/0xabc123....json
+./bloco-vanity-generator --analyze-keystore ./keystores/0xabc123....json
 
 # Check client compatibility
-./bloco-eth --check-compatibility --keystore ./keystores/0xabc123....json --client geth
+./bloco-vanity-generator --check-compatibility --keystore ./keystores/0xabc123....json --client geth
 
 # Validate KDF parameters
-./bloco-eth --validate-params --keystore-kdf scrypt --kdf-params '{"n":262144,"r":8,"p":1,"dklen":32}'
+./bloco-vanity-generator --validate-params --keystore-kdf scrypt --kdf-params '{"n":262144,"r":8,"p":1,"dklen":32}'
 ```
 
 ## Architecture Overview
@@ -878,7 +883,7 @@ export BLOCO_KEYSTORE_DIR=./my-keys
 export BLOCO_KEYSTORE_KDF=pbkdf2
 
 # Generate wallet with environment settings
-./bloco-eth --prefix abc
+./bloco-vanity-generator --prefix abc
 ```
 
 ### Safe Pattern Length Guidelines
@@ -918,7 +923,7 @@ All operations are securely logged without sensitive data:
 
 ```bash
 # Generate wallets with secure logging (default)
-./bloco-eth --prefix abc --count 5
+./bloco-vanity-generator --prefix abc --count 5
 
 # Logged information includes only:
 # - Ethereum addresses (public information)
@@ -1120,7 +1125,7 @@ Monitor generation performance using the built-in statistics:
 
 ```bash
 # Safe moderate difficulty generation with progress
-./bloco-eth --prefix abcd --progress --count 1
+./bloco-vanity-generator --prefix abcd --progress --count 1
 ```
 
 **Never use patterns longer than 4 characters** - they are impractical and can take days/weeks/years to complete, even on high-performance hardware.
