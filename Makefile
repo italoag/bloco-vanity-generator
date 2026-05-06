@@ -203,7 +203,7 @@ stats-test: build ## Test statistics functionality
 # Demo run with all features
 .PHONY: demo
 demo: build ## Run comprehensive demo
-   @echo "Bloco Wallet Demo"
+	@echo "Bloco Wallet Demo"
 	@echo "==================="
 	@echo "\n1. Simple wallet generation:"
 	./$(BINARY_NAME) --prefix cafe --count 1
