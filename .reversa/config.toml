@@ -1,0 +1,73 @@
+# Reversa — Configuração do Projeto
+# Este arquivo é gerenciado pelo instalador. Para customizações, edite config.user.toml
+
+[project]
+name = "bloco-wallet-generator"
+version = "1.0.0"
+
+[user]
+name = "Italo"
+chat_language = "pt-br"
+doc_language = "Português"
+
+[output]
+folder = ".reversa/"
+
+[agents]
+installed = [
+  "reversa",
+  "reversa-scout",
+  "reversa-archaeologist",
+  "reversa-detective",
+  "reversa-architect",
+  "reversa-writer",
+  "reversa-reviewer",
+  "reversa-visor",
+  "reversa-data-master",
+  "reversa-design-system",
+  "reversa-agents-help",
+  "reversa-reconstructor",
+  "reversa-migrate",
+  "reversa-paradigm-advisor",
+  "reversa-curator",
+  "reversa-strategist",
+  "reversa-designer",
+  "reversa-inspector",
+  "reversa-requirements",
+  "reversa-doubt",
+  "reversa-plan",
+  "reversa-to-do",
+  "reversa-audit",
+  "reversa-quality",
+  "reversa-coding",
+  "reversa-principles",
+  "reversa-resume",
+  "reversa-pricing-profile",
+  "reversa-pricing-size",
+  "reversa-pricing-estimate"
+]
+
+[engines]
+installed = [
+  "claude-code",
+  "codex",
+  "gemini-cli",
+  "windsurf",
+  "opencode",
+  "github-copilot"
+]
+
+[analysis]
+answer_mode = "chat"
+doc_level = "completo"
+
+# Organização das specs geradas pelos agentes.
+# Esta seção é preenchida pelo Reversa após o Scout sugerir uma estrutura
+# e o usuário confirmar a escolha no menu (logo após a pergunta de doc_level).
+# Para reapresentar o menu, remova a seção [specs] inteira e rode o Reversa de novo.
+[specs]
+layout = "feature-folder"
+granularity = "hybrid"
+custom_folders = []
+scout_suggestion = "hybrid"
+decided_at = "2026-05-08T00:15:00Z"

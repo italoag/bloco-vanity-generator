@@ -1,0 +1,169 @@
+{
+  "generated_at": "2026-05-08T00:15:00Z",
+  "project_root": "/Users/t798157/Projects/lab/bloco-wallet-generator",
+  "languages": [
+    {
+      "name": "Go",
+      "extensions": [
+        ".go"
+      ],
+      "file_count": 61
+    },
+    {
+      "name": "Markdown",
+      "extensions": [
+        ".md"
+      ],
+      "file_count": 28
+    },
+    {
+      "name": "Shell",
+      "extensions": [
+        ".sh"
+      ],
+      "file_count": 5
+    },
+    {
+      "name": "YAML",
+      "extensions": [
+        ".yaml",
+        ".yml"
+      ],
+      "file_count": 7
+    }
+  ],
+  "primary_language": "Go",
+  "frameworks": [
+    {
+      "name": "Go Modules",
+      "version": "go 1.24.3",
+      "source": "go.mod"
+    },
+    {
+      "name": "Cobra",
+      "version": "v1.10.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "Fang",
+      "version": "v0.4.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "Bubble Tea",
+      "version": "v1.3.6",
+      "source": "go.mod"
+    },
+    {
+      "name": "Lip Gloss",
+      "version": "v1.1.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "Go Ethereum",
+      "version": "v1.16.3",
+      "source": "go.mod"
+    }
+  ],
+  "package_manager": "go modules",
+  "entry_points": [
+    {
+      "path": "cmd/bloco-eth/main.go",
+      "type": "cli_entry"
+    },
+    {
+      "path": "internal/cli/commands.go",
+      "type": "command_router"
+    }
+  ],
+  "config_files": [
+    "go.mod",
+    "go.sum",
+    "Makefile",
+    "Dockerfile",
+    ".dockerignore",
+    ".github/dependabot.yml",
+    ".whitesource",
+    "internal/config/config.go"
+  ],
+  "ci_cd": [
+    ".github/workflows/ci.yaml",
+    ".github/workflows/docker.yaml",
+    ".github/workflows/go.yaml",
+    ".github/workflows/release.yaml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/version-bump.yml"
+  ],
+  "docker": {
+    "dockerfile": "Dockerfile"
+  },
+  "database_hints": [],
+  "test_framework": "go test",
+  "test_file_count": 24,
+  "modules": [
+    "cmd/bloco-eth",
+    "internal/cli",
+    "internal/config",
+    "internal/crypto",
+    "internal/crypto/kdf",
+    "internal/progress",
+    "internal/tui",
+    "internal/validation",
+    "internal/worker",
+    "pkg/errors",
+    "pkg/logging",
+    "pkg/utils",
+    "pkg/wallet"
+  ],
+  "total_files": 114,
+  "organization_suggestion": {
+    "granularity": "hybrid",
+    "rationale": "O projeto combina roteamento centralizado de comandos CLI com módulos técnicos bem definidos em internal/ e pkg/.",
+    "signals": [
+      {
+        "type": "centralized_cli_command_routing",
+        "evidence": [
+          "internal/cli/commands.go"
+        ]
+      },
+      {
+        "type": "top_level_domain_folders",
+        "evidence": [
+          "internal/cli/",
+          "internal/config/",
+          "internal/crypto/",
+          "internal/worker/",
+          "pkg/logging/",
+          "pkg/wallet/"
+        ]
+      },
+      {
+        "type": "behavior_oriented_specs",
+        "evidence": [
+          "specs/001-animated-banner-create/spec.md",
+          "specs/001-animated-banner-create/tasks.md"
+        ]
+      }
+    ],
+    "features": []
+  },
+  "sensitive_or_generated_artifacts": [
+    {
+      "path": "keystores/",
+      "type": "generated_wallet_artifacts",
+      "summary": {
+        ".json": 170,
+        ".pwd": 170,
+        ".mnemonic": 22
+      }
+    },
+    {
+      "path": "internal/worker/wallets-*.log",
+      "type": "generated_logs"
+    },
+    {
+      "path": "debug.log",
+      "type": "debug_log"
+    }
+  ]
+}

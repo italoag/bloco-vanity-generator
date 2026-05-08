@@ -1,0 +1,1226 @@
+{
+  "generated_at": "2026-05-08T00:25:00Z",
+  "modules": [
+    {
+      "name": "cmd/bloco-eth",
+      "path": "cmd/bloco-eth",
+      "purpose": "Ponto de entrada do binário, inicialização de contexto com cancelamento, carregamento de configuração, validação e execução do comando raiz via Fang/Cobra.",
+      "primary_files": [
+        "cmd/bloco-eth/main.go"
+      ],
+      "functions": [
+        {
+          "name": "main",
+          "file": "cmd/bloco-eth/main.go",
+          "params": [],
+          "returns": "void",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "setupGracefulShutdown",
+          "file": "cmd/bloco-eth/main.go",
+          "params": [],
+          "returns": "context.Context, context.CancelFunc",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "handleError",
+          "file": "cmd/bloco-eth/main.go",
+          "params": [
+            "err error"
+          ],
+          "returns": "void",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [],
+      "business_rules": [
+        {
+          "description": "Configuração inválida encerra o processo com código 1 antes da criação da aplicação CLI.",
+          "location": "cmd/bloco-eth/main.go:33",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "Sinais os.Interrupt e SIGTERM cancelam o contexto para desligamento gracioso.",
+          "location": "cmd/bloco-eth/main.go:53",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "internal/cli",
+        "internal/config",
+        "pkg/errors",
+        "github.com/charmbracelet/fang"
+      ],
+      "algorithms": [
+        "Inicialização sequencial: contexto -> config -> validação -> aplicação -> execução Fang."
+      ],
+      "complexity": "low"
+    },
+    {
+      "name": "internal/cli",
+      "path": "internal/cli",
+      "purpose": "Camada de orquestração CLI: define comandos, flags, parsing de configuração, geração de carteiras, stats, benchmark, TUI/text fallback e persistência de keystores.",
+      "primary_files": [
+        "internal/cli/commands.go"
+      ],
+      "functions": [
+        {
+          "name": "NewApplication",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "cfg *config.Config",
+            "version string",
+            "gitCommit string",
+            "buildTime string"
+          ],
+          "returns": "*Application",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "generateWallet",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "cmd *cobra.Command",
+            "args []string"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "generateSingleWalletTUI",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "context.Context",
+            "worker.WorkerPool",
+            "wallet.GenerationCriteria"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "generateMultipleWalletsTUI",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "context.Context",
+            "worker.WorkerPool",
+            "wallet.GenerationCriteria",
+            "count int"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "showStats",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "cmd *cobra.Command",
+            "args []string"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "runBenchmark",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "cmd *cobra.Command",
+            "args []string"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "parseFlags",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "cmd *cobra.Command"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "generateAndSaveKeystoreWithVerbose",
+          "file": "internal/cli/commands.go",
+          "params": [
+            "w *wallet.Wallet",
+            "verbose bool"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "Application",
+          "fields": [
+            {
+              "name": "config",
+              "type": "*config.Config",
+              "required": true
+            },
+            {
+              "name": "rootCmd",
+              "type": "*cobra.Command",
+              "required": true
+            },
+            {
+              "name": "version",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "gitCommit",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "buildTime",
+              "type": "string",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "--threads=0 autodetecta runtime.NumCPU(); valores positivos substituem a configuração.",
+          "location": "internal/cli/commands.go:971",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "TUI só é usada quando habilitada, há --progress e o modo quiet está desligado.",
+          "location": "internal/cli/commands.go:184",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "Bitcoin salva somente mnemonic; Ethereum e Solana geram KeyStore V3/formatos compatíveis.",
+          "location": "internal/cli/commands.go:1948",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "internal/config",
+        "internal/crypto",
+        "internal/crypto/kdf",
+        "internal/tui",
+        "internal/validation",
+        "internal/worker",
+        "pkg/wallet",
+        "pkg/utils",
+        "pkg/errors",
+        "cobra",
+        "bubbletea"
+      ],
+      "algorithms": [
+        "Roteamento Cobra",
+        "Fallback TUI->texto",
+        "Validação KDF via JSON",
+        "Cálculo de dificuldade e probabilidade",
+        "Benchmark com amostras periódicas"
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "internal/config",
+      "path": "internal/config",
+      "purpose": "Configuração central da aplicação com defaults, overrides por ambiente e validação de limites operacionais.",
+      "primary_files": [
+        "internal/config/config.go"
+      ],
+      "functions": [
+        {
+          "name": "DefaultConfig",
+          "file": "internal/config/config.go",
+          "params": [],
+          "returns": "*Config",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "LoadFromEnvironment",
+          "file": "internal/config/config.go",
+          "params": [],
+          "returns": "void",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Validate",
+          "file": "internal/config/config.go",
+          "params": [],
+          "returns": "error",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "Config",
+          "fields": [
+            {
+              "name": "Worker",
+              "type": "WorkerConfig",
+              "required": true
+            },
+            {
+              "name": "TUI",
+              "type": "TUIConfig",
+              "required": true
+            },
+            {
+              "name": "Crypto",
+              "type": "CryptoConfig",
+              "required": true
+            },
+            {
+              "name": "CLI",
+              "type": "CLIConfig",
+              "required": true
+            },
+            {
+              "name": "KeyStore",
+              "type": "KeyStoreConfig",
+              "required": true
+            },
+            {
+              "name": "Logging",
+              "type": "LoggingConfig",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "Thread count deve estar entre 1 e 128.",
+          "location": "internal/config/config.go:210",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "Quiet mode e verbose output são mutuamente exclusivos.",
+          "location": "internal/config/config.go:256",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "KDF permitido: scrypt, pbkdf2, pbkdf2-sha256 ou pbkdf2-sha512.",
+          "location": "internal/config/config.go:266",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "runtime",
+        "os",
+        "strconv",
+        "time"
+      ],
+      "algorithms": [
+        "Merge simples de defaults com variáveis BLOCO_*"
+      ],
+      "complexity": "medium"
+    },
+    {
+      "name": "internal/crypto",
+      "path": "internal/crypto",
+      "purpose": "Primitivas criptográficas e geração de carteiras para Ethereum, Bitcoin e Solana; checksum EIP-55; KeyStore V3; pools de objetos; senha, entropia e limpeza de memória.",
+      "primary_files": [
+        "internal/crypto/ethereum.go",
+        "internal/crypto/bitcoin.go",
+        "internal/crypto/solana.go",
+        "internal/crypto/checksum.go",
+        "internal/crypto/keystore.go",
+        "internal/crypto/password.go",
+        "internal/crypto/pools.go",
+        "internal/crypto/random.go",
+        "internal/crypto/validation.go",
+        "internal/crypto/generator.go"
+      ],
+      "functions": [
+        {
+          "name": "GenerateAddressFromPrivateKey",
+          "file": "internal/crypto/ethereum.go",
+          "params": [
+            "privateKey []byte"
+          ],
+          "returns": "string, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "OptimizedAddressGeneration",
+          "file": "internal/crypto/ethereum.go",
+          "params": [
+            "privateKey []byte"
+          ],
+          "returns": "string, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "ToChecksumAddress",
+          "file": "internal/crypto/checksum.go",
+          "params": [
+            "address string"
+          ],
+          "returns": "string, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "EncryptPrivateKeyWithKDF",
+          "file": "internal/crypto/keystore.go",
+          "params": [
+            "privateKeyHex string",
+            "password string",
+            "kdfType string",
+            "network string"
+          ],
+          "returns": "*KeyStoreV3, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "GenerateSecurePassword",
+          "file": "internal/crypto/password.go",
+          "params": [],
+          "returns": "string, error",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "KeyStoreV3",
+          "fields": [
+            {
+              "name": "Address",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "Crypto",
+              "type": "KeyStoreCrypto",
+              "required": true
+            },
+            {
+              "name": "ID",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "Version",
+              "type": "int",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "PoolManager",
+          "fields": [
+            {
+              "name": "cryptoPool",
+              "type": "*CryptoPool",
+              "required": true
+            },
+            {
+              "name": "hasherPool",
+              "type": "*HasherPool",
+              "required": true
+            },
+            {
+              "name": "bufferPool",
+              "type": "*BufferPool",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "Ethereum private key deve ter 32 bytes; Solana aceita 64-byte private key ou 32-byte seed.",
+          "location": "internal/crypto/ethereum.go:81; internal/crypto/solana.go:49",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "KeyStore usa aes-128-ctr, versão 3, KDF scrypt ou pbkdf2.",
+          "location": "internal/crypto/keystore.go:665",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "Senha gerada tem mínimo 12 caracteres e ao menos uma letra minúscula, maiúscula, número e especial.",
+          "location": "internal/crypto/password.go:34",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "go-ethereum",
+        "btcsuite/btcd",
+        "solana-go",
+        "x/crypto/scrypt",
+        "x/crypto/pbkdf2",
+        "google/uuid"
+      ],
+      "algorithms": [
+        "Ethereum address = últimos 20 bytes do Keccak256 da chave pública secp256k1",
+        "EIP-55 checksum por hash Keccak do endereço lowercase",
+        "AES-128-CTR + MAC Keccak(derivedKey[16:32] + ciphertext)",
+        "Fisher-Yates para embaralhar senha",
+        "Object pooling com sync.Pool e limpeza de buffers"
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "internal/crypto/kdf",
+      "path": "internal/crypto/kdf",
+      "purpose": "Serviço universal de KDF com handlers scrypt/PBKDF2, normalização de aliases, validação, derivação, logging e análise de compatibilidade de clientes Ethereum.",
+      "primary_files": [
+        "internal/crypto/kdf/service.go",
+        "internal/crypto/kdf/scrypt.go",
+        "internal/crypto/kdf/pbkdf2.go",
+        "internal/crypto/kdf/analyzer.go",
+        "internal/crypto/kdf/types.go",
+        "internal/crypto/kdf/interfaces.go"
+      ],
+      "functions": [
+        {
+          "name": "DeriveKey",
+          "file": "internal/crypto/kdf/service.go",
+          "params": [
+            "password string",
+            "crypto *CryptoParams"
+          ],
+          "returns": "[]byte, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "ValidateParams",
+          "file": "internal/crypto/kdf/service.go",
+          "params": [
+            "kdfType string",
+            "params map[string]interface{}"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "AnalyzeKeystore",
+          "file": "internal/crypto/kdf/analyzer.go",
+          "params": [
+            "crypto *CryptoParams"
+          ],
+          "returns": "*CompatibilityReport, error",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "CryptoParams",
+          "fields": [
+            {
+              "name": "KDF",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "KDFParams",
+              "type": "map[string]interface{}",
+              "required": true
+            },
+            {
+              "name": "Cipher",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "CipherText",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "MAC",
+              "type": "string",
+              "required": false
+            }
+          ],
+          "confidence": "confirmed"
+        },
+        {
+          "name": "CompatibilityReport",
+          "fields": [
+            {
+              "name": "Compatible",
+              "type": "bool",
+              "required": true
+            },
+            {
+              "name": "KDFType",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "SecurityLevel",
+              "type": "SecurityLevel",
+              "required": true
+            },
+            {
+              "name": "Issues",
+              "type": "[]string",
+              "required": true
+            },
+            {
+              "name": "Warnings",
+              "type": "[]string",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "scrypt N deve ser potência de 2 entre 1024 e 67108864; memória máxima validada em 2GB.",
+          "location": "internal/crypto/kdf/scrypt.go:84",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "PBKDF2 requer pelo menos 1000 iterações e recomenda 100000+.",
+          "location": "internal/crypto/kdf/pbkdf2.go:92",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "salt nunca é logado por SecureKDFLogger.",
+          "location": "internal/crypto/kdf/interfaces.go:124",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "x/crypto/scrypt",
+        "x/crypto/pbkdf2",
+        "crypto/sha256",
+        "crypto/sha512",
+        "pkg/logging"
+      ],
+      "algorithms": [
+        "Normalização de aliases KDF",
+        "Validação por ranges",
+        "Estimativa de segurança e compatibilidade por cliente",
+        "Otimização de parâmetros por nível de segurança e memória máxima"
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "internal/progress",
+      "path": "internal/progress",
+      "purpose": "Agregação e exibição textual thread-safe do progresso de geração, consumindo estatísticas do worker pool.",
+      "primary_files": [
+        "internal/progress/manager.go"
+      ],
+      "functions": [
+        {
+          "name": "Start",
+          "file": "internal/progress/manager.go",
+          "params": [],
+          "returns": "void",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Stop",
+          "file": "internal/progress/manager.go",
+          "params": [],
+          "returns": "void",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "aggregateWorkerData",
+          "file": "internal/progress/manager.go",
+          "params": [],
+          "returns": "void",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "ProgressManager",
+          "fields": [
+            {
+              "name": "statsCollector",
+              "type": "*worker.StatsCollector",
+              "required": true
+            },
+            {
+              "name": "stats",
+              "type": "*wallet.GenerationStats",
+              "required": true
+            },
+            {
+              "name": "isActive",
+              "type": "int32",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "Start/Stop usam CompareAndSwap para evitar múltiplas goroutines de display.",
+          "location": "internal/progress/manager.go:56",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "internal/worker",
+        "pkg/wallet",
+        "pkg/utils"
+      ],
+      "algorithms": [
+        "Agregação periódica com ticker",
+        "ETA baseado em probability50 e velocidade agregada"
+      ],
+      "complexity": "medium"
+    },
+    {
+      "name": "internal/tui",
+      "path": "internal/tui",
+      "purpose": "Interface terminal com Bubble Tea/Bubbles/Lip Gloss para progresso, estatísticas, benchmark, estilos e detecção de capacidades.",
+      "primary_files": [
+        "internal/tui/manager.go",
+        "internal/tui/progress.go",
+        "internal/tui/stats.go",
+        "internal/tui/benchmark.go",
+        "internal/tui/styles.go",
+        "internal/tui/logo.go",
+        "internal/tui/utils.go"
+      ],
+      "functions": [
+        {
+          "name": "DetectCapabilities",
+          "file": "internal/tui/manager.go",
+          "params": [],
+          "returns": "TUICapabilities",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Update",
+          "file": "internal/tui/progress.go",
+          "params": [
+            "tea.Msg"
+          ],
+          "returns": "tea.Model, tea.Cmd",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "View",
+          "file": "internal/tui/progress.go",
+          "params": [],
+          "returns": "string",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "ProgressModel",
+          "fields": [
+            {
+              "name": "stats",
+              "type": "*wallet.GenerationStats",
+              "required": true
+            },
+            {
+              "name": "walletResults",
+              "type": "[]WalletResult",
+              "required": false
+            },
+            {
+              "name": "completedWallets",
+              "type": "int",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "NO_COLOR desabilita cores; TERM dumb ou vazio desabilita resize/cor.",
+          "location": "internal/tui/manager.go:79",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "bubbletea",
+        "bubbles/progress",
+        "bubbles/table",
+        "lipgloss",
+        "x/term"
+      ],
+      "algorithms": [
+        "State machine Bubble Tea por mensagens",
+        "Renderização adaptativa por tamanho de terminal",
+        "Tabela rolável de resultados"
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "internal/validation",
+      "path": "internal/validation",
+      "purpose": "Estratégias de validação de endereço por padrão, incluindo case-insensitive, checksum EIP-55, exact match e estratégia otimizada.",
+      "primary_files": [
+        "internal/validation/strategy.go"
+      ],
+      "functions": [
+        {
+          "name": "ValidateWithCriteria",
+          "file": "internal/validation/strategy.go",
+          "params": [
+            "address string",
+            "criteria wallet.GenerationCriteria"
+          ],
+          "returns": "bool, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "validateCaseInsensitive",
+          "file": "internal/validation/strategy.go",
+          "params": [
+            "address string",
+            "prefix string",
+            "suffix string"
+          ],
+          "returns": "bool",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "ValidationStrategy",
+          "fields": [
+            {
+              "name": "Validate",
+              "type": "func(address,prefix,suffix string)(bool,error)",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "Endereços Ethereum validados por este módulo devem ter 40 caracteres hexadecimais sem 0x.",
+          "location": "internal/validation/strategy.go:60",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "internal/crypto",
+        "pkg/errors",
+        "pkg/wallet"
+      ],
+      "algorithms": [
+        "Strategy pattern",
+        "Comparação ASCII sem alocações para caminho otimizado",
+        "Validação checksum após filtro case-insensitive"
+      ],
+      "complexity": "medium"
+    },
+    {
+      "name": "internal/worker",
+      "path": "internal/worker",
+      "purpose": "Pool concorrente de workers que gera carteiras até encontrar padrões, agrega métricas e emite resultados/cancelamentos.",
+      "primary_files": [
+        "internal/worker/pool.go",
+        "internal/worker/stats.go",
+        "internal/worker/interface.go"
+      ],
+      "functions": [
+        {
+          "name": "NewPoolWithConfig",
+          "file": "internal/worker/pool.go",
+          "params": [
+            "threadCount int",
+            "cfg *config.Config",
+            "network string"
+          ],
+          "returns": "*Pool",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "GenerateWalletWithContext",
+          "file": "internal/worker/pool.go",
+          "params": [
+            "ctx context.Context",
+            "criteria wallet.GenerationCriteria"
+          ],
+          "returns": "*wallet.GenerationResult, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Start",
+          "file": "internal/worker/stats.go",
+          "params": [
+            "statsChan <-chan WorkerStats",
+            "ctx context.Context"
+          ],
+          "returns": "void",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "GetPerformanceMetrics",
+          "file": "internal/worker/stats.go",
+          "params": [],
+          "returns": "PerformanceMetrics",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "Pool",
+          "fields": [
+            {
+              "name": "threadCount",
+              "type": "int",
+              "required": true
+            },
+            {
+              "name": "statsCollector",
+              "type": "*StatsCollector",
+              "required": true
+            },
+            {
+              "name": "generator",
+              "type": "crypto.Generator",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "threadCount <= 0 vira 1 dentro do Pool.",
+          "location": "internal/worker/pool.go:52",
+          "confidence": "confirmed"
+        },
+        {
+          "description": "Mnemonic é suportado somente para Ethereum; outras redes desativam UseMnemonic no worker.",
+          "location": "internal/worker/pool.go:231",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "internal/config",
+        "internal/crypto",
+        "pkg/wallet",
+        "pkg/logging",
+        "pkg/errors"
+      ],
+      "algorithms": [
+        "Fan-out de goroutines por thread",
+        "Primeiro resultado vence via resultCh bufferizado",
+        "Stats não-bloqueantes a cada 100ms ou 1000 tentativas",
+        "Reconstrução de chave privada apenas após match para otimização"
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "pkg/errors",
+      "path": "pkg/errors",
+      "purpose": "Modelo padronizado de erros estruturados com tipo, operação, mensagem, causa, contexto, timestamp e stack opcional.",
+      "primary_files": [
+        "pkg/errors/types.go"
+      ],
+      "functions": [
+        {
+          "name": "WrapError",
+          "file": "pkg/errors/types.go",
+          "params": [
+            "err error",
+            "errorType ErrorType",
+            "operation string",
+            "message string"
+          ],
+          "returns": "*BlocoError",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "BlocoError",
+          "fields": [
+            {
+              "name": "Type",
+              "type": "ErrorType",
+              "required": true
+            },
+            {
+              "name": "Operation",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "Message",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "Cause",
+              "type": "error",
+              "required": false
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "Tipos de erro permitidos são validation, crypto, worker, configuration, tui, generation, timeout e cancellation.",
+          "location": "pkg/errors/types.go:12",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "runtime",
+        "time"
+      ],
+      "algorithms": [
+        "Captura limitada de stack via runtime.Caller"
+      ],
+      "complexity": "low"
+    },
+    {
+      "name": "pkg/logging",
+      "path": "pkg/logging",
+      "purpose": "Logger seguro com redaction/sanitização, formatos text/json/structured, buffering assíncrono e rotação de arquivo.",
+      "primary_files": [
+        "pkg/logging/secure_logger.go",
+        "pkg/logging/types.go"
+      ],
+      "functions": [
+        {
+          "name": "NewSecureLogger",
+          "file": "pkg/logging/secure_logger.go",
+          "params": [
+            "config *LogConfig"
+          ],
+          "returns": "SecureLogger, error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "LogOperationStart",
+          "file": "pkg/logging/secure_logger.go",
+          "params": [
+            "operation string",
+            "params map[string]interface{}"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "LogError",
+          "file": "pkg/logging/secure_logger.go",
+          "params": [
+            "operation string",
+            "err error",
+            "context map[string]interface{}"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "LogEntry",
+          "fields": [
+            {
+              "name": "Timestamp",
+              "type": "time.Time",
+              "required": true
+            },
+            {
+              "name": "Level",
+              "type": "LogLevel",
+              "required": true
+            },
+            {
+              "name": "Message",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "Fields",
+              "type": "map[string]interface{}",
+              "required": false
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "Parâmetros sensíveis são filtrados por whitelist; salt e segredos não devem aparecer nos logs.",
+          "location": "pkg/logging/secure_logger.go:871",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "os",
+        "io",
+        "path/filepath",
+        "regexp",
+        "sync",
+        "time"
+      ],
+      "algorithms": [
+        "Sanitização por whitelist",
+        "Redaction de erros e paths",
+        "Rotação de arquivos por tamanho",
+        "Buffer assíncrono com Flush/Close"
+      ],
+      "complexity": "high"
+    },
+    {
+      "name": "pkg/utils",
+      "path": "pkg/utils",
+      "purpose": "Utilitários puros de formatação, tabelas, barras de progresso e cálculo probabilístico de dificuldade de padrões.",
+      "primary_files": [
+        "pkg/utils/format.go"
+      ],
+      "functions": [
+        {
+          "name": "CalculateDifficulty",
+          "file": "pkg/utils/format.go",
+          "params": [
+            "prefix string",
+            "suffix string",
+            "isChecksum bool"
+          ],
+          "returns": "float64",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "CalculateProbability",
+          "file": "pkg/utils/format.go",
+          "params": [
+            "difficulty float64",
+            "attempts int64"
+          ],
+          "returns": "float64",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "CalculateProbability50",
+          "file": "pkg/utils/format.go",
+          "params": [
+            "difficulty float64"
+          ],
+          "returns": "int64",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [],
+      "business_rules": [
+        {
+          "description": "Dificuldade base é 16^len(prefix+suffix); checksum multiplica por 2 para cada caractere alfabético do padrão.",
+          "location": "pkg/utils/format.go:288",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "math",
+        "strconv",
+        "time"
+      ],
+      "algorithms": [
+        "Probabilidade cumulativa: 1 - (1 - 1/difficulty)^attempts",
+        "Tentativas para 50%: log(0.5)/log(1-1/difficulty)"
+      ],
+      "complexity": "low"
+    },
+    {
+      "name": "pkg/wallet",
+      "path": "pkg/wallet",
+      "purpose": "Tipos de domínio para carteira, critérios, resultados, estatísticas e benchmark; logger legado simples para CSV/texto.",
+      "primary_files": [
+        "pkg/wallet/types.go",
+        "pkg/wallet/logger.go"
+      ],
+      "functions": [
+        {
+          "name": "Validate",
+          "file": "pkg/wallet/types.go",
+          "params": [],
+          "returns": "error",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "Update",
+          "file": "pkg/wallet/types.go",
+          "params": [
+            "attempts int64"
+          ],
+          "returns": "void",
+          "confidence": "confirmed"
+        },
+        {
+          "name": "LogWallet",
+          "file": "pkg/wallet/logger.go",
+          "params": [
+            "result *GenerationResult"
+          ],
+          "returns": "error",
+          "confidence": "confirmed"
+        }
+      ],
+      "entities": [
+        {
+          "name": "Wallet",
+          "fields": [
+            {
+              "name": "Address",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "PublicKey",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "PrivateKey",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "Mnemonic",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "Network",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "CreatedAt",
+              "type": "time.Time",
+              "required": true
+            }
+          ],
+          "confidence": "confirmed"
+        }
+      ],
+      "business_rules": [
+        {
+          "description": "GenerationCriteria limita padrão total a 20 caracteres e exige prefix/suffix hexadecimais.",
+          "location": "pkg/wallet/types.go:112",
+          "confidence": "confirmed"
+        }
+      ],
+      "dependencies": [
+        "time",
+        "os"
+      ],
+      "algorithms": [
+        "Atualização de estatísticas com probabilidade e ETA",
+        "Validação hex de critérios"
+      ],
+      "complexity": "medium"
+    }
+  ]
+}
