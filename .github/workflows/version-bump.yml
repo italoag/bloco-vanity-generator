@@ -1,17 +1,20 @@
-name: Bump Version
+name: Bump Version and Release
 
 on:
-  pull_request:
+  push:
     branches: [main]
-    types: [closed]
 
 permissions:
   contents: write
+  actions: write
   pull-requests: read
+
+concurrency:
+  group: version-bump-main
+  cancel-in-progress: false
 
 jobs:
   bump:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -24,14 +27,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Check existing version tag
+        id: current
+        run: |
+          current_tag=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)
+          if [[ -n "$current_tag" ]]; then
+            echo "Commit ${GITHUB_SHA} already has version tag $current_tag. Skipping bump."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "tag=$current_tag" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Get last tag
+        if: steps.current.outputs.skip != 'true'
         id: last
         run: |
-          tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+          tag=$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 2>/dev/null || echo "v0.0.0")
           echo "tag=$tag" >> $GITHUB_OUTPUT
 
       - name: Calculate next version
+        if: steps.current.outputs.skip != 'true'
         id: next
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           last=${{ steps.last.outputs.tag }}
           version=${last#v}
@@ -40,26 +59,86 @@ jobs:
             minor="${BASH_REMATCH[2]}"
             patch="${BASH_REMATCH[3]}"
           else
-            echo "Warning: Tag '$last' does not follow semantic versioning. Defaulting to v0.1.0."
+            echo "Warning: Tag '$last' does not follow semantic versioning. Defaulting to v0.0.0."
             major=0
             minor=0
             patch=0
           fi
-          src_branch=$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")
-          echo "Source branch: $src_branch"
-          if [[ "$src_branch" =~ ^(hotfix|bugfix)/ ]]; then
-            # hotfix/* or bugfix/* => patch bump
-            patch=$((patch+1))
+
+          prs_json=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" 2>/dev/null || echo "[]")
+
+          src_branch=$(jq -r '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last | .head.ref // empty' <<< "$prs_json")
+          pr_number=$(jq -r '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last | .number // empty' <<< "$prs_json")
+
+          if [[ -z "$src_branch" ]]; then
+            commit_message=$(git log -1 --pretty=%B)
+            if [[ "$commit_message" =~ Merge[[:space:]]pull[[:space:]]request[[:space:]]#[0-9]+[[:space:]]from[[:space:]][^/]+/(.+) ]]; then
+              src_branch="${BASH_REMATCH[1]}"
+            elif [[ "$commit_message" =~ Merge[[:space:]]remote-tracking[[:space:]]branch[[:space:]]\'origin/([^\']+)\' ]]; then
+              src_branch="${BASH_REMATCH[1]}"
+            elif [[ "$commit_message" =~ Merge[[:space:]]branch[[:space:]]\'([^\']+)\' ]]; then
+              src_branch="${BASH_REMATCH[1]}"
+            fi
+          fi
+
+          if [[ -z "$src_branch" ]]; then
+            bump="patch"
+            reason="direct commit to main"
+          elif [[ "$src_branch" == hotfix/* || "$src_branch" == fix/* ]]; then
+            bump="patch"
+            reason="hotfix source branch: $src_branch"
+          elif [[ "$src_branch" == milestone || "$src_branch" == milestone/* ]]; then
+            bump="major"
+            reason="milestone source branch: $src_branch"
+          elif [[ "$src_branch" == development ]]; then
+            bump="minor"
+            reason="development source branch"
+          elif [[ -n "$pr_number" ]]; then
+            bump="minor"
+            reason="merged PR #$pr_number from $src_branch"
           else
-            # feature/* and others (default) => minor bump
+            bump="minor"
+            reason="merge from $src_branch"
+          fi
+
+          echo "Source branch: ${src_branch:-<direct-main>}"
+          echo "Bump type: $bump ($reason)"
+
+          if [[ "$bump" == "patch" ]]; then
+            patch=$((patch+1))
+          elif [[ "$bump" == "minor" ]]; then
             minor=$((minor+1))
             patch=0
+          elif [[ "$bump" == "major" ]]; then
+            major=$((major+1))
+            minor=0
+            patch=0
+          else
+            echo "Unsupported bump type: $bump"
+            exit 1
           fi
+
           echo "version=v${major}.${minor}.${patch}" >> $GITHUB_OUTPUT
+          echo "bump=$bump" >> $GITHUB_OUTPUT
+          echo "source_branch=${src_branch:-direct-main}" >> $GITHUB_OUTPUT
+          echo "reason=$reason" >> $GITHUB_OUTPUT
 
       - name: Create tag
+        if: steps.current.outputs.skip != 'true'
         env:
           NEW_TAG: ${{ steps.next.outputs.version }}
+          BUMP: ${{ steps.next.outputs.bump }}
+          REASON: ${{ steps.next.outputs.reason }}
         run: |
-          git tag "$NEW_TAG"
+          git tag -a "$NEW_TAG" -m "Release $NEW_TAG ($BUMP): $REASON"
           git push origin "$NEW_TAG"
+
+      - name: Trigger release workflow
+        if: steps.current.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_TAG: ${{ steps.next.outputs.version }}
+        run: |
+          gh workflow run release.yaml --ref "$NEW_TAG" -f tag="$NEW_TAG"
