@@ -371,9 +371,9 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 						if criteria.Network == "ethereum" || criteria.Network == "" {
 							// Reconstruct private key for result (Ethereum only)
 							privateKey = new(ecdsa.PrivateKey)
-							privateKey.PublicKey.Curve = ethcrypto.S256()
+							privateKey.Curve = ethcrypto.S256()
 							privateKey.D = new(big.Int).SetBytes(privateKeyBytes)
-							privateKey.PublicKey.X, privateKey.PublicKey.Y = ethcrypto.S256().ScalarBaseMult(privateKeyBytes)
+							privateKey.X, privateKey.Y = ethcrypto.S256().ScalarBaseMult(privateKeyBytes)
 						} else {
 							// For non-Ethereum, store the raw bytes
 							rawPrivateKeyBytes = make([]byte, len(privateKeyBytes))

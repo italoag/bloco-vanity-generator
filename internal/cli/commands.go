@@ -1954,7 +1954,7 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 	// Bitcoin only saves mnemonic, no KeyStore V3
 	if strings.ToLower(w.Network) == "bitcoin" {
 		if w.Mnemonic == "" {
-			return fmt.Errorf("Bitcoin wallet requires mnemonic for backup")
+			return fmt.Errorf("bitcoin wallet requires mnemonic for backup")
 		}
 
 		// Create keystore service just for saving mnemonic

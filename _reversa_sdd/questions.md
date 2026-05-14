@@ -2,6 +2,7 @@
 
 > Gerado pelo Revisor em 2026-05-08T07:40:44Z
 > Respostas recebidas no chat e consolidadas pelo Revisor em 2026-05-08T09:42:40Z.
+> Revisado em 2026-05-14: decisões transversais mantidas e usadas para responder os `questions.md` unitários.
 
 ---
 

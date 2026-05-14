@@ -38,22 +38,22 @@ func (e *KeyStoreError) Error() string {
 	}
 
 	var msg strings.Builder
-	msg.WriteString(fmt.Sprintf("keystore %s failed", e.Operation))
+	fmt.Fprintf(&msg, "keystore %s failed", e.Operation)
 
 	if e.Component != "" {
-		msg.WriteString(fmt.Sprintf(" for %s", e.Component))
+		fmt.Fprintf(&msg, " for %s", e.Component)
 	}
 
 	if e.Address != "" {
-		msg.WriteString(fmt.Sprintf(" (address: %s)", e.Address))
+		fmt.Fprintf(&msg, " (address: %s)", e.Address)
 	}
 
 	if e.Path != "" {
-		msg.WriteString(fmt.Sprintf(" (path: %s)", e.Path))
+		fmt.Fprintf(&msg, " (path: %s)", e.Path)
 	}
 
 	if e.Underlying != nil {
-		msg.WriteString(fmt.Sprintf(": %v", e.Underlying))
+		fmt.Fprintf(&msg, ": %v", e.Underlying)
 	}
 
 	return msg.String()
@@ -1435,7 +1435,7 @@ func (ks *KeyStoreService) SaveKeyStoreFilesToDisk(address string, keystore *Key
 		return ks.saveEthereumKeyStore(address, keystore, password)
 	case "bitcoin":
 		// Bitcoin only saves mnemonic, no KeyStore V3
-		return fmt.Errorf("Bitcoin keystore saving should use SaveMnemonicFile directly")
+		return fmt.Errorf("bitcoin keystore saving should use SaveMnemonicFile directly")
 	case "solana":
 		// Save Solana keypair JSON
 		if err := ks.saveSolanaKeypair(address, keystore); err != nil {
