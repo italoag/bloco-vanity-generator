@@ -1,0 +1,8 @@
+flow: fire
+version: 0.1.65
+installed_at: '2026-05-12T11:40:09.989Z'
+tools:
+  - claude
+  - copilot
+  - windsurf
+  - opencode

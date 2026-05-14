@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 2,
+  "startedAt": "2026-05-08T10:28:00Z",
+  "lastCheckpoint": "2026-05-08T12:10:00Z",
+  "completedAgents": [
+    "paradigm_advisor",
+    "curator",
+    "strategist",
+    "designer",
+    "inspector"
+  ],
+  "pendingAgents": [],
+  "currentAgent": {
+    "agent": null,
+    "phase": null,
+    "status": "completed",
+    "topologyApproved": true
+  },
+  "pendingDecisions": [],
+  "artifacts": {
+    "migration_brief": {
+      "path": "_reversa_sdd/migration/migration_brief.md",
+      "sha256": "4dc254d1c0117eccd00bf69b17057247264ca87195ab2f4d21623bcef07dcdb1",
+      "producedBy": "orchestrator"
+    },
+    "paradigm_decision": {
+      "path": "_reversa_sdd/migration/paradigm_decision.md",
+      "sha256": "2a062a7cb52da79bfd797f29070d5ee0b1832d2389305092610871c984839aa5",
+      "producedBy": "paradigm_advisor"
+    },
+    "target_business_rules": {
+      "path": "_reversa_sdd/migration/target_business_rules.md",
+      "sha256": "9e7c49c9387d80b5daadf6afca34522945dcb28e4f509d560721c991f71e85d8",
+      "producedBy": "curator"
+    },
+    "discard_log": {
+      "path": "_reversa_sdd/migration/discard_log.md",
+      "sha256": "7b1552106139f59ee17af5b05176997a83f48c813a28049143e4c6f316563f03",
+      "producedBy": "curator"
+    },
+    "ambiguity_log": {
+      "path": "_reversa_sdd/migration/ambiguity_log.md",
+      "sha256": "ba9c82149a26a6aca090282b0e764eae9dbd6f5933edbaa84cd94cd3e3fcd53a",
+      "producedBy": "orchestrator+curator"
+    },
+    "migration_strategy": {
+      "path": "_reversa_sdd/migration/migration_strategy.md",
+      "sha256": "3a0abe185a7ed72721f3425bd4e6ca7a2861739f983a136178eec72e11c40541",
+      "producedBy": "strategist"
+    },
+    "risk_register": {
+      "path": "_reversa_sdd/migration/risk_register.md",
+      "sha256": "de0b1148f9cda0faeba678e9856b16917a0bad71a1dbf82a1053e56704b6057d",
+      "producedBy": "strategist"
+    },
+    "cutover_plan": {
+      "path": "_reversa_sdd/migration/cutover_plan.md",
+      "sha256": "55ac50033575b10b6522b7e5a3997ebe286ff3c49b13c1a73910c6984aebcad2",
+      "producedBy": "strategist"
+    },
+    "topology_decision": {
+      "path": "_reversa_sdd/migration/topology_decision.md",
+      "sha256": "e786213874896e907e5da36d240036ba4bb9eec4d3fafe1eb35ed7fc127a94b6",
+      "producedBy": "designer"
+    },
+    "target_architecture": {
+      "path": "_reversa_sdd/migration/target_architecture.md",
+      "sha256": "8bc30e7b8c99fe52a1a4bd434241c67d5f3565a3056156315d14981769b76108",
+      "producedBy": "designer"
+    },
+    "target_domain_model": {
+      "path": "_reversa_sdd/migration/target_domain_model.md",
+      "sha256": "1777e1ccf552672dc87470638a5d2a1d862cf8378d6fc7c9e6ee2b578b4bbac4",
+      "producedBy": "designer"
+    },
+    "target_data_model": {
+      "path": "_reversa_sdd/migration/target_data_model.md",
+      "sha256": "12d33202440e09404b3e795c2fcbf3b7d3a761843640ca156e017980619aed5b",
+      "producedBy": "designer"
+    },
+    "data_migration_plan": {
+      "path": "_reversa_sdd/migration/data_migration_plan.md",
+      "sha256": "578cc3b9a58b600448c34987ddf17b005535c9e58c588185f35d32fbf29fd22e",
+      "producedBy": "designer"
+    },
+    "parity_specs": {
+      "path": "_reversa_sdd/migration/parity_specs.md",
+      "sha256": "d3569370d77d2a98d3efb9b0dbe8a6ee11bd33f583935c8907c6340c883a3a38",
+      "producedBy": "inspector"
+    },
+    "parity_test_001_cli_inicializacao_config": {
+      "path": "_reversa_sdd/migration/parity_tests/001-cli-inicializacao-config.feature",
+      "sha256": "5e6068787eefc85fd74a99a89bf363de5f8ee4c021b650cf02c309b68ee46bbe",
+      "producedBy": "inspector"
+    },
+    "parity_test_002_geracao_vanity_worker": {
+      "path": "_reversa_sdd/migration/parity_tests/002-geracao-vanity-worker.feature",
+      "sha256": "b5f173ecabdb922a11ca8cbd734ba9e028468b7a5db78f7debf5a3c7f2cbbcda",
+      "producedBy": "inspector"
+    },
+    "parity_test_003_validacao_multirede": {
+      "path": "_reversa_sdd/migration/parity_tests/003-validacao-multirede.feature",
+      "sha256": "cfbfd5eed54e93386d1f62ba68e9aff6c14d8c0bab316b7c790e6ea72386b3cc",
+      "producedBy": "inspector"
+    },
+    "parity_test_004_crypto_keystore_kdf": {
+      "path": "_reversa_sdd/migration/parity_tests/004-crypto-keystore-kdf.feature",
+      "sha256": "b2c7c9a89324e8b23a1f9c4daab7527686fcf788c75c20d2879fecfad7ac1d62",
+      "producedBy": "inspector"
+    },
+    "parity_test_005_persistencia_artefatos": {
+      "path": "_reversa_sdd/migration/parity_tests/005-persistencia-artefatos.feature",
+      "sha256": "14304d2a96929d1dbad7886dd0f7d86fd86e71ac699dc976b91231c38503965d",
+      "producedBy": "inspector"
+    },
+    "parity_test_006_logging_seguro_stdout": {
+      "path": "_reversa_sdd/migration/parity_tests/006-logging-seguro-stdout.feature",
+      "sha256": "d7e62b82f12de4b65305eb74112bf17e4ca104f360550d530650eca997b9d948",
+      "producedBy": "inspector"
+    },
+    "parity_test_007_tui_progress_fallback": {
+      "path": "_reversa_sdd/migration/parity_tests/007-tui-progress-fallback.feature",
+      "sha256": "eb9f17367356a27a834633cfb5e0f8dcd34ec8367f3a7e1e43243dddcecdf661",
+      "producedBy": "inspector"
+    },
+    "parity_test_008_ci_release_docker": {
+      "path": "_reversa_sdd/migration/parity_tests/008-ci-release-docker.feature",
+      "sha256": "4c2a5292f7c7f615c239b0dd36db93fc679945237179c8d0bb9f6593477893dd",
+      "producedBy": "inspector"
+    },
+    "handoff": {
+      "path": "_reversa_sdd/migration/handoff.md",
+      "sha256": "aadcfddd07eeccce0fcce679324e72aed8538ef6d4aecac71a4fd4b4a6ddad59",
+      "producedBy": "orchestrator"
+    }
+  },
+  "auto": false,
+  "engine": "Cascade",
+  "reversaVersion": "1.2.34",
+  "briefPath": "_reversa_sdd/migration/migration_brief.md",
+  "expectedLegacyArtifacts": "references/expected_legacy_artifacts.yaml"
+}
