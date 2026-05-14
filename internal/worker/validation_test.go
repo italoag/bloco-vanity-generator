@@ -576,6 +576,24 @@ func TestIsEIP55Checksum(t *testing.T) {
 	}
 }
 
+func TestMatchesCriteria_EIP55CaseSensitivePrefix(t *testing.T) {
+	address := "0xDEAD00000000000000000000000000000000004B"
+
+	if !matchesCriteria(address, "DEAD", "", true, "ethereum", true) {
+		t.Fatalf("expected exact EIP-55 prefix match")
+	}
+
+	for _, prefix := range []string{"dead", "DeAD", "DEaD", "dEAd"} {
+		if matchesCriteria(address, prefix, "", true, "ethereum", true) {
+			t.Fatalf("expected %q to be rejected in case-sensitive EIP-55 mode", prefix)
+		}
+	}
+
+	if !matchesCriteria(address, "dead", "", true, "ethereum", false) {
+		t.Fatalf("expected case-insensitive EIP-55 mode to accept lowercase prefix")
+	}
+}
+
 // TestSuffixValidationBugDocumentation documents the specific bug behavior
 // This test demonstrates the exact issue described in the design document
 func TestSuffixValidationBugDocumentation(t *testing.T) {

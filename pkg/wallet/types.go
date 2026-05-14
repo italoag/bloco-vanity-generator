@@ -25,12 +25,13 @@ type GenerationResult struct {
 
 // GenerationCriteria defines the criteria for wallet generation
 type GenerationCriteria struct {
-	Network     string `json:"network"`
-	Prefix      string `json:"prefix"`
-	Suffix      string `json:"suffix"`
-	IsChecksum  bool   `json:"is_checksum"`
-	UseMnemonic bool   `json:"use_mnemonic,omitempty"`
-	MaxAttempts int64  `json:"max_attempts,omitempty"`
+	Network       string `json:"network"`
+	Prefix        string `json:"prefix"`
+	Suffix        string `json:"suffix"`
+	IsChecksum    bool   `json:"is_checksum"`
+	CaseSensitive bool   `json:"case_sensitive,omitempty"`
+	UseMnemonic   bool   `json:"use_mnemonic,omitempty"`
+	MaxAttempts   int64  `json:"max_attempts,omitempty"`
 }
 
 // GenerationRequest represents a request for wallet generation
@@ -127,6 +128,16 @@ func (gc *GenerationCriteria) Validate() error {
 	if !isValidHex(gc.Suffix) {
 		return NewValidationError("criteria_validation",
 			"suffix contains invalid hex characters")
+	}
+
+	if gc.CaseSensitive && !gc.IsChecksum {
+		return NewValidationError("criteria_validation",
+			"case-sensitive matching requires checksum validation")
+	}
+
+	if gc.CaseSensitive && gc.Network != "" && gc.Network != "ethereum" {
+		return NewValidationError("criteria_validation",
+			"case-sensitive matching is only supported for ethereum")
 	}
 
 	// Max attempts validation

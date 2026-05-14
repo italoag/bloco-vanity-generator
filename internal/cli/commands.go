@@ -1354,15 +1354,17 @@ func (app *Application) getGenerationCriteria(cmd *cobra.Command) (wallet.Genera
 	prefix, _ := cmd.Flags().GetString("prefix")
 	suffix, _ := cmd.Flags().GetString("suffix")
 	checksum, _ := cmd.Flags().GetBool("checksum")
+	caseSensitive, _ := cmd.Flags().GetBool("case-sensitive")
 	useMnemonic, _ := cmd.Flags().GetBool("with-mnemonic")
 	network, _ := cmd.Flags().GetString("network")
 
 	criteria := wallet.GenerationCriteria{
-		Network:     network,
-		Prefix:      prefix,
-		Suffix:      suffix,
-		IsChecksum:  checksum,
-		UseMnemonic: useMnemonic,
+		Network:       network,
+		Prefix:        prefix,
+		Suffix:        suffix,
+		IsChecksum:    checksum,
+		CaseSensitive: caseSensitive,
+		UseMnemonic:   useMnemonic,
 	}
 
 	return criteria, criteria.Validate()

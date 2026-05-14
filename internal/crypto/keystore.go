@@ -1395,7 +1395,7 @@ func formatAddressForFilename(address, network string) string {
 
 	// Only add 0x prefix for Ethereum
 	if network == "ethereum" || network == "" {
-		return "0x" + strings.ToLower(cleanAddress)
+		return "0x" + cleanAddress
 	}
 
 	// Bitcoin and Solana: preserve original case, no 0x prefix
@@ -1900,34 +1900,34 @@ func (ks *KeyStoreService) FileExists(filename string) (bool, error) {
 
 // GetKeystoreFilePath returns the full path for a keystore file given an address
 func (ks *KeyStoreService) GetKeystoreFilePath(address string) (string, error) {
-	cleanAddress := strings.ToLower(strings.TrimPrefix(address, "0x"))
+	cleanAddress := strings.TrimPrefix(address, "0x")
 	if len(cleanAddress) == 0 {
 		return "", fmt.Errorf("address cannot be empty")
 	}
 
-	filename := fmt.Sprintf("0x%s.json", cleanAddress)
+	filename := fmt.Sprintf("%s.json", formatAddressForFilename(address, "ethereum"))
 	return filepath.Join(ks.config.OutputDirectory, filename), nil
 }
 
 // GetPasswordFilePath returns the full path for a password file given an address
 func (ks *KeyStoreService) GetPasswordFilePath(address string) (string, error) {
-	cleanAddress := strings.ToLower(strings.TrimPrefix(address, "0x"))
+	cleanAddress := strings.TrimPrefix(address, "0x")
 	if len(cleanAddress) == 0 {
 		return "", fmt.Errorf("address cannot be empty")
 	}
 
-	filename := fmt.Sprintf("0x%s.pwd", cleanAddress)
+	filename := fmt.Sprintf("%s.pwd", formatAddressForFilename(address, "ethereum"))
 	return filepath.Join(ks.config.OutputDirectory, filename), nil
 }
 
 // GetMnemonicFilePath returns the full path for a mnemonic file given an address
 func (ks *KeyStoreService) GetMnemonicFilePath(address string) (string, error) {
-	cleanAddress := strings.ToLower(strings.TrimPrefix(address, "0x"))
+	cleanAddress := strings.TrimPrefix(address, "0x")
 	if len(cleanAddress) == 0 {
 		return "", fmt.Errorf("address cannot be empty")
 	}
 
-	filename := fmt.Sprintf("0x%s.mnemonic", cleanAddress)
+	filename := fmt.Sprintf("%s.mnemonic", formatAddressForFilename(address, "ethereum"))
 	return filepath.Join(ks.config.OutputDirectory, filename), nil
 }
 

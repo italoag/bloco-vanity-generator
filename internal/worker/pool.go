@@ -266,7 +266,7 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 					addressStr = genWallet.Address
 
 					// Check if address matches criteria
-					if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network) {
+					if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
 						continue
 					}
 
@@ -365,7 +365,7 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 
 					// If we found a match, we need to reconstruct the full private key object for the result
 					// Otherwise we just return the buffer to the pool
-					if matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network) {
+					if matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
 						// Only reconstruct ECDSA private key for Ethereum
 						// For Solana and Bitcoin, we'll use the raw bytes directly
 						if criteria.Network == "ethereum" || criteria.Network == "" {
@@ -399,7 +399,7 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 				// If we are here from mnemonic path, we haven't checked yet.
 
 				// Double check match (just in case)
-				if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network) {
+				if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
 					continue
 				}
 
@@ -551,7 +551,7 @@ func generateMnemonicPrivateKey() (string, *ecdsa.PrivateKey, error) {
 // It performs a fast string check first, and only calculates checksum if necessary
 // matchesCriteria checks if an address matches the given prefix and suffix criteria
 // It performs a fast string check first, and only calculates checksum if necessary
-func matchesCriteria(address, prefix, suffix string, isChecksum bool, network string) bool {
+func matchesCriteria(address, prefix, suffix string, isChecksum bool, network string, caseSensitivePattern ...bool) bool {
 	// 1. Fast filter: Check pattern on raw address
 	// We want to avoid expensive checksum calculation if the basic letters don't match
 
@@ -561,10 +561,22 @@ func matchesCriteria(address, prefix, suffix string, isChecksum bool, network st
 		addrWithoutPrefix = address[2:]
 	}
 
+	if isChecksum && (network == "ethereum" || network == "") {
+		checksumAddress := toChecksumAddress(address)
+		if strings.HasPrefix(checksumAddress, "0x") {
+			addrWithoutPrefix = checksumAddress[2:]
+		} else {
+			addrWithoutPrefix = checksumAddress
+		}
+	}
+
 	// Determine matching mode based on network
 	// Ethereum is case-insensitive by default (unless checksum is checked later)
 	// Bitcoin and Solana are case-sensitive (Base58)
 	caseSensitive := network == "bitcoin" || network == "solana"
+	if len(caseSensitivePattern) > 0 && caseSensitivePattern[0] {
+		caseSensitive = true
+	}
 
 	// Check prefix
 	if prefix != "" {

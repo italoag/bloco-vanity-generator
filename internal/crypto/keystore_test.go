@@ -1534,6 +1534,49 @@ func TestKeyStoreService_SaveKeyStoreFiles(t *testing.T) {
 	}
 }
 
+func TestFormatAddressForFilenamePreservesEthereumCase(t *testing.T) {
+	address := "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e"
+
+	got := formatAddressForFilename(address, "ethereum")
+	if got != address {
+		t.Fatalf("expected %s, got %s", address, got)
+	}
+}
+
+func TestKeyStoreService_SaveKeyStoreFilesPreservesEthereumFilenameCase(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "keystore-case-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	address := "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e"
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tempDir, KDF: "scrypt"})
+	keystore := createValidKeyStore(strings.TrimPrefix(address, "0x"))
+
+	if err := service.SaveKeyStoreFilesToDisk(address, keystore, "TestPassword123!", "ethereum", ""); err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to read temp directory: %v", err)
+	}
+
+	names := map[string]bool{}
+	for _, entry := range entries {
+		names[entry.Name()] = true
+	}
+
+	if !names[address+".json"] {
+		t.Fatalf("expected keystore filename %s.json, got %v", address, names)
+	}
+
+	if !names[address+".pwd"] {
+		t.Fatalf("expected password filename %s.pwd, got %v", address, names)
+	}
+}
+
 func TestKeyStoreService_SaveMnemonicFile(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "mnemonic-test-*")
 	if err != nil {
@@ -2132,6 +2175,14 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 			wantKeystorePath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.json",
 			wantPasswordPath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.pwd",
 			wantMnemonicPath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.mnemonic",
+			wantError:        false,
+		},
+		{
+			name:             "mixed case ethereum address",
+			address:          "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e",
+			wantKeystorePath: "/test/dir/0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
+			wantPasswordPath: "/test/dir/0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.pwd",
+			wantMnemonicPath: "/test/dir/0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.mnemonic",
 			wantError:        false,
 		},
 
