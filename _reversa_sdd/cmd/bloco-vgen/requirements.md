@@ -1,11 +1,11 @@
-# Módulo cmd/bloco-eth
+# Módulo cmd/bloco-vgen
 
 > Spec gerada pelo Reversa Writer.  
 > Escala: 🟢 CONFIRMADO no código | 🟡 INFERIDO | 🔴 LACUNA
 
 ## Visão Geral
 
-O módulo `cmd/bloco-eth` é o ponto de entrada executável do sistema. Ele inicializa o contexto cancelável, carrega e valida configuração, instancia a aplicação CLI e delega a execução do comando raiz ao Fang/Cobra. 🟢
+O módulo `cmd/bloco-vgen` é o ponto de entrada executável do sistema. Ele inicializa o contexto cancelável, carrega e valida configuração, instancia a aplicação CLI e delega a execução do comando raiz ao Fang/Cobra. 🟢
 
 ## Responsabilidades
 
@@ -41,17 +41,17 @@ O módulo `cmd/bloco-eth` é o ponto de entrada executável do sistema. Ele inic
 
 | Tipo | Requisito inferido | Evidência no código | Confiança |
 |------|--------------------|---------------------|-----------|
-| Disponibilidade | A aplicação deve responder a sinais de interrupção com cancelamento gracioso em vez de depender apenas de término abrupto. | `cmd/bloco-eth/main.go:53-67` | 🟢 |
-| Operabilidade | Falhas de configuração devem ser reportadas em `stderr` com exit code não-zero. | `cmd/bloco-eth/main.go:33-37` | 🟢 |
-| Observabilidade | Erros estruturados devem expor contexto e, em debug, stack trace. | `cmd/bloco-eth/main.go:69-94` | 🟢 |
-| Build/Release | Versão, commit e data de build devem ser injetáveis por flags de build. | `cmd/bloco-eth/main.go:17-22`; `Dockerfile:35-39`; `.github/workflows/ci.yaml:178-181` | 🟢 |
+| Disponibilidade | A aplicação deve responder a sinais de interrupção com cancelamento gracioso em vez de depender apenas de término abrupto. | `cmd/bloco-vgen/main.go:53-67` | 🟢 |
+| Operabilidade | Falhas de configuração devem ser reportadas em `stderr` com exit code não-zero. | `cmd/bloco-vgen/main.go:33-37` | 🟢 |
+| Observabilidade | Erros estruturados devem expor contexto e, em debug, stack trace. | `cmd/bloco-vgen/main.go:69-94` | 🟢 |
+| Build/Release | Versão, commit e data de build devem ser injetáveis por flags de build. | `cmd/bloco-vgen/main.go:17-22`; `Dockerfile:35-39`; `.github/workflows/ci.yaml:178-181` | 🟢 |
 
 > Inferido a partir do código. Validar com equipe de operações.
 
 ## Critérios de Aceitação
 
 ```gherkin
-Dado que o binário `bloco-eth` é iniciado com configuração válida
+Dado que o binário `bloco-vgen` é iniciado com configuração válida
 Quando a função `main` executa
 Então a aplicação deve criar a CLI e delegar a execução ao Fang com o comando raiz
 
@@ -92,9 +92,9 @@ Então `stderr` deve conter `Error: <erro>`
 
 | Arquivo | Função / Classe | Cobertura |
 |---------|-----------------|-----------|
-| `cmd/bloco-eth/main.go` | `main` | 🟢 |
-| `cmd/bloco-eth/main.go` | `setupGracefulShutdown` | 🟢 |
-| `cmd/bloco-eth/main.go` | `handleError` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `main` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `setupGracefulShutdown` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `handleError` | 🟢 |
 | `internal/config/config.go` | `DefaultConfig`, `LoadFromEnvironment`, `Validate` | 🟡 |
 | `internal/cli/commands.go` | `NewApplication`, `GetRootCommand` | 🟡 |
 | `pkg/errors/types.go` | `BlocoError` | 🟡 |

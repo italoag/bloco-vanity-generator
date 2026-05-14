@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/wallet"
 )
 
 // WorkerStats holds statistics for individual workers

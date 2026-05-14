@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/wallet"
 )
 
 const (

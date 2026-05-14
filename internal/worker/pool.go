@@ -16,11 +16,11 @@ import (
 	"github.com/tyler-smith/go-bip39"
 	"golang.org/x/crypto/sha3"
 
-	"bloco-eth/internal/config"
-	"bloco-eth/internal/crypto"
-	"bloco-eth/pkg/errors"
-	"bloco-eth/pkg/logging"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/internal/config"
+	"bloco-vgen/internal/crypto"
+	"bloco-vgen/pkg/errors"
+	"bloco-vgen/pkg/logging"
+	"bloco-vgen/pkg/wallet"
 )
 
 // Pool is a minimal implementation that mimics the working monolithic version

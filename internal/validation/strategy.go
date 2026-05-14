@@ -3,9 +3,9 @@ package validation
 import (
 	"strings"
 
-	"bloco-eth/internal/crypto"
-	"bloco-eth/pkg/errors"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/internal/crypto"
+	"bloco-vgen/pkg/errors"
+	"bloco-vgen/pkg/wallet"
 )
 
 // ValidationStrategy defines the interface for address validation strategies

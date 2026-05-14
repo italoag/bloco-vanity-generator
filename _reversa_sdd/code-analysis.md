@@ -7,7 +7,7 @@
 
 ## Visão executiva
 
-O sistema é uma aplicação CLI para geração de carteiras vanity multi-rede. O fluxo central nasce em `cmd/bloco-eth/main.go`, cria configuração padrão, aplica variáveis de ambiente, valida limites e delega a execução ao comando raiz Cobra por meio do Fang.
+O sistema é uma aplicação CLI para geração de carteiras vanity multi-rede. O fluxo central nasce em `cmd/bloco-vgen/main.go`, cria configuração padrão, aplica variáveis de ambiente, valida limites e delega a execução ao comando raiz Cobra por meio do Fang.
 
 A geração efetiva é orquestrada por `internal/cli`, executada por `internal/worker` e apoiada por `internal/crypto`. A aplicação suporta Ethereum, Bitcoin e Solana, com foco mais profundo em Ethereum: geração secp256k1, endereço por Keccak256, checksum EIP-55 e KeyStore V3 com AES-128-CTR, MAC Keccak e KDF configurável.
 
@@ -15,7 +15,7 @@ A geração efetiva é orquestrada por `internal/cli`, executada por `internal/w
 
 | Módulo | Papel | Complexidade | Confiança |
 |---|---|---:|---|
-| `cmd/bloco-eth` | Bootstrap, config, sinais e execução CLI | baixa | 🟢 |
+| `cmd/bloco-vgen` | Bootstrap, config, sinais e execução CLI | baixa | 🟢 |
 | `internal/cli` | Orquestração dos comandos, flags, TUI/texto, keystore e benchmark | alta | 🟢 |
 | `internal/config` | Defaults, variáveis de ambiente e validação | média | 🟢 |
 | `internal/crypto` | Geração cripto multi-rede, checksum, keystore, pools e senha | alta | 🟢 |
@@ -33,7 +33,7 @@ A geração efetiva é orquestrada por `internal/cli`, executada por `internal/w
 
 1. `main()` cria contexto cancelável por sinal, carrega `config.DefaultConfig()` e aplica `LoadFromEnvironment()`.
 2. `config.Validate()` bloqueia configurações inválidas antes da CLI iniciar.
-3. `cli.NewApplication()` monta o comando raiz `bloco-eth` e subcomandos `stats`, `benchmark` e `version`.
+3. `cli.NewApplication()` monta o comando raiz `bloco-vgen` e subcomandos `stats`, `benchmark` e `version`.
 4. O comando raiz chama `generateWallet()`.
 5. `parseFlags()` atualiza a configuração com flags de threads, TUI, keystore, KDF e logging.
 6. `getGenerationCriteria()` cria `wallet.GenerationCriteria` com `network`, `prefix`, `suffix`, `checksum` e `with-mnemonic`.

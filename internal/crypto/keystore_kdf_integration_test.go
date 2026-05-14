@@ -3,7 +3,7 @@ package crypto
 import (
 	"testing"
 
-	"bloco-eth/internal/crypto/kdf"
+	"bloco-vgen/internal/crypto/kdf"
 )
 
 // TestKeyStoreService_UniversalKDFIntegration tests the integration with Universal KDF service

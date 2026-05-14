@@ -1,12 +1,12 @@
 # Caso de Uso: Inicialização da CLI
 
 > Spec gerada pelo Reversa Writer.  
-> Unit pai: `cmd/bloco-eth`  
+> Unit pai: `cmd/bloco-vgen`  
 > Escala: 🟢 CONFIRMADO no código | 🟡 INFERIDO | 🔴 LACUNA
 
 ## Visão Geral
 
-A inicialização da CLI é o fluxo que prepara o processo `bloco-eth` para executar qualquer comando. O fluxo cria contexto cancelável, carrega configuração, valida limites operacionais, instancia a aplicação CLI e entrega a execução ao Fang/Cobra. 🟢
+A inicialização da CLI é o fluxo que prepara o processo `bloco-vgen` para executar qualquer comando. O fluxo cria contexto cancelável, carrega configuração, valida limites operacionais, instancia a aplicação CLI e entrega a execução ao Fang/Cobra. 🟢
 
 ## Responsabilidades
 
@@ -44,17 +44,17 @@ A inicialização da CLI é o fluxo que prepara o processo `bloco-eth` para exec
 
 | Tipo | Requisito inferido | Evidência no código | Confiança |
 |------|--------------------|---------------------|-----------|
-| Operabilidade | Erros de configuração devem ser visíveis em `stderr` antes do encerramento. | `cmd/bloco-eth/main.go:33-37` | 🟢 |
-| Disponibilidade | Operações longas devem poder ser canceladas por contexto quando o processo recebe sinal. | `cmd/bloco-eth/main.go:24-27`, `cmd/bloco-eth/main.go:53-67` | 🟢 |
-| Build/Release | Metadados de versão devem ter defaults e serem substituíveis no build. | `cmd/bloco-eth/main.go:17-22`; `Dockerfile:35-39` | 🟢 |
-| UX de terminal | A execução deve usar Fang para comando raiz com suporte a sinais. | `cmd/bloco-eth/main.go:42-47` | 🟢 |
+| Operabilidade | Erros de configuração devem ser visíveis em `stderr` antes do encerramento. | `cmd/bloco-vgen/main.go:33-37` | 🟢 |
+| Disponibilidade | Operações longas devem poder ser canceladas por contexto quando o processo recebe sinal. | `cmd/bloco-vgen/main.go:24-27`, `cmd/bloco-vgen/main.go:53-67` | 🟢 |
+| Build/Release | Metadados de versão devem ter defaults e serem substituíveis no build. | `cmd/bloco-vgen/main.go:17-22`; `Dockerfile:35-39` | 🟢 |
+| UX de terminal | A execução deve usar Fang para comando raiz com suporte a sinais. | `cmd/bloco-vgen/main.go:42-47` | 🟢 |
 
 > Inferido a partir do código. Validar com equipe de operações.
 
 ## Critérios de Aceitação
 
 ```gherkin
-Dado que o processo `bloco-eth` é iniciado
+Dado que o processo `bloco-vgen` é iniciado
 Quando `main()` começa a execução
 Então um contexto cancelável deve ser criado antes do carregamento da configuração
 
@@ -96,9 +96,9 @@ Então a mensagem de desligamento gracioso deve ser emitida e o contexto deve se
 
 | Arquivo | Função / Classe | Cobertura |
 |---------|-----------------|-----------|
-| `cmd/bloco-eth/main.go` | `main` | 🟢 |
-| `cmd/bloco-eth/main.go` | `setupGracefulShutdown` | 🟢 |
-| `cmd/bloco-eth/main.go` | variáveis `Version`, `GitCommit`, `BuildTime` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `main` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `setupGracefulShutdown` | 🟢 |
+| `cmd/bloco-vgen/main.go` | variáveis `Version`, `GitCommit`, `BuildTime` | 🟢 |
 | `internal/config/config.go` | `DefaultConfig`, `LoadFromEnvironment`, `Validate` | 🟡 |
 | `internal/cli/commands.go` | `NewApplication`, `GetRootCommand` | 🟡 |
 | `Dockerfile` | `-ldflags` para metadados de build | 🟢 |

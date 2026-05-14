@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"bloco-eth/internal/config"
+	"bloco-vgen/internal/config"
 )
 
 func TestGetGenerationCriteriaReadsCaseSensitiveFlag(t *testing.T) {

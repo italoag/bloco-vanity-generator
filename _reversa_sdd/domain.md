@@ -125,7 +125,7 @@ Foram encontrados arquivos `wallets-*.log` em `internal/worker/`. A análise foi
 
 | ID | Lacuna | Impacto | Confiança |
 |---|---|---|---:|
-| GAP-001 | O produto se chama `Bloco Vanity Generator`, mas o módulo/binário/caminhos ainda misturam `bloco-eth`, `bloco-wallet-generator` e `bloco-vanity-generator`. | Pode confundir instalação, release, Docker e imports. | 🟢 |
+| GAP-001 | O produto se chama `Bloco Vanity Generator`, mas o módulo/binário/caminhos ainda misturam `bloco-vgen`, `bloco-wallet-generator` e `bloco-vanity-generator`. | Pode confundir instalação, release, Docker e imports. | 🟢 |
 | GAP-002 | README descreve flags `--optimize-for` e benchmark `--pattern`, mas a leitura de `commands.go` não confirmou essas flags no trecho analisado. | Documentação pode anunciar comportamento inexistente/incompleto. | 🟡 |
 | GAP-003 | `EncryptPrivateKeyWithKDF()` usa endereço Ethereum placeholder ao montar KeyStore. | Pode gerar keystore com endereço incorreto em fluxo específico. | 🟢 |
 | GAP-004 | Persistência Solana contém placeholder/simplificação para keypair. | Risco de backup/import incompleto para Solana. | 🟢 |

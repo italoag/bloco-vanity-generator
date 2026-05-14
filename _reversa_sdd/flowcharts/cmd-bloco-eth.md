@@ -1,4 +1,4 @@
-# Flowchart — cmd/bloco-eth
+# Flowchart — cmd/bloco-vgen
 
 ```mermaid
 flowchart TD

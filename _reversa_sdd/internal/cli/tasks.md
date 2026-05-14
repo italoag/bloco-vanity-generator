@@ -34,7 +34,7 @@
 
 - [ ] T-04, Implementar `setupCommands()` com comando raiz de geração e subcomandos.
   - Origem no legado: `internal/cli/commands.go:55-75`
-  - Critério de pronto: root command `bloco-eth` possui `RunE: app.generateWallet`, versão formatada e subcomandos `stats`, `benchmark`, `version`.
+  - Critério de pronto: root command `bloco-vgen` possui `RunE: app.generateWallet`, versão formatada e subcomandos `stats`, `benchmark`, `version`.
   - Confiança: 🟢
 
 - [ ] T-05, Registrar flags globais de geração, performance, saída, keystore e logging.

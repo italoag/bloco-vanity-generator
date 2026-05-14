@@ -44,7 +44,7 @@ flowchart LR
 
 | Componente | Tipo | Responsabilidade | Origem (legado / novo / fundido) |
 |---|---|---|---|
-| `cmd/bloco-vgen` | CLI | Bootstrap, carregamento de configuração, sinais e execução do comando raiz. | Renomeado de `cmd/bloco-eth`; BR-MIGRAR-002. |
+| `cmd/bloco-vgen` | CLI | Bootstrap, carregamento de configuração, sinais e execução do comando raiz. | Renomeado de `cmd/bloco-vgen`; BR-MIGRAR-002. |
 | Adapter CLI | Adapter | Parse de flags, binding para casos de uso e tradução de erros para códigos de saída. | Dividido de `internal/cli`; BR-MIGRAR-003..006. |
 | Casos de uso `generate`, `stats`, `benchmark`, `version` | Serviço | Orquestrar comandos sem conhecer detalhes de Cobra, filesystem ou TUI. | Dividido de `internal/cli`; comandos confirmados em `inventory.md`. |
 | Domínio de critérios e carteira | Serviço | Value objects, invariantes por rede e validação de carteira. | Fundido de `pkg/wallet`, `internal/validation`, `domain.md`; BR-MIGRAR-008..010. |

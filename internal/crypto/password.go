@@ -1,7 +1,7 @@
 package crypto
 
 import (
-	"bloco-eth/pkg/errors"
+	"bloco-vgen/pkg/errors"
 	"crypto/rand"
 	"fmt"
 	"strings"

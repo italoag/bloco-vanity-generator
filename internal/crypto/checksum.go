@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"bloco-eth/pkg/errors"
+	"bloco-vgen/pkg/errors"
 )
 
 // ChecksumValidator handles EIP-55 checksum validation for Ethereum addresses

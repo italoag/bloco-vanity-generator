@@ -6,7 +6,7 @@
 
 ## Interface
 
-O caso de uso é exposto pelo comando raiz Cobra `bloco-eth`, configurado em `Application.setupCommands()` com `RunE: app.generateWallet`. O operador interage por flags CLI; o fluxo retorna `error` para o runtime Cobra/Fang e escreve resultados no terminal ou na TUI. 🟢
+O caso de uso é exposto pelo comando raiz Cobra `bloco-vgen`, configurado em `Application.setupCommands()` com `RunE: app.generateWallet`. O operador interage por flags CLI; o fluxo retorna `error` para o runtime Cobra/Fang e escreve resultados no terminal ou na TUI. 🟢
 
 | Símbolo | Assinatura | Retorno | Papel |
 |---------|-----------|---------|------|
@@ -44,7 +44,7 @@ sequenceDiagram
   participant T as TUI ou Texto
   participant FS as Filesystem
 
-  U->>Cobra: bloco-eth --prefix/--suffix/--count/...
+  U->>Cobra: bloco-vgen --prefix/--suffix/--count/...
   Cobra->>CLI: generateWallet(cmd,args)
   CLI->>CFG: parseFlags + Validate
   CLI->>CLI: getGenerationCriteria + criteria.Validate
@@ -67,7 +67,7 @@ sequenceDiagram
   CLI->>W: Shutdown()
 ```
 
-1. O operador executa o comando raiz `bloco-eth` com flags de geração. 🟢
+1. O operador executa o comando raiz `bloco-vgen` com flags de geração. 🟢
 2. Cobra chama `app.generateWallet(cmd, args)` porque o root command usa `RunE: app.generateWallet`. 🟢 `internal/cli/commands.go:55-66`
 3. `generateWallet()` lê o contexto do comando. 🟢 `internal/cli/commands.go:127-129`
 4. `parseFlags()` aplica flags à configuração, incluindo threads, TUI, keystore, KDF e logging. 🟢 `internal/cli/commands.go:130-134`, `internal/cli/commands.go:969-1041`

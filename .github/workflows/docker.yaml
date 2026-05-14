@@ -42,7 +42,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-eth
+        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -84,7 +84,7 @@ jobs:
       if: github.event_name != 'pull_request'
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-eth:${{ steps.meta.outputs.version }}
+        image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen:${{ steps.meta.outputs.version }}
         format: 'sarif'
         output: 'trivy-results.sarif'
 
@@ -97,7 +97,7 @@ jobs:
     - name: Test Docker image
       run: |
         # Test that the image runs correctly
-        docker run --rm ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-eth:${{ steps.meta.outputs.version }} --help || true
+        docker run --rm ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen:${{ steps.meta.outputs.version }} --help || true
 
   multi-arch-test:
     name: Multi-Architecture Test
@@ -119,13 +119,13 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-eth
+        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen
 
     - name: Test image on ${{ matrix.platform }}
       run: |
         # Test the specific platform image
         docker run --rm --platform ${{ matrix.platform }} \
-          ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-eth:${{ steps.meta.outputs.version }} \
+          ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen:${{ steps.meta.outputs.version }} \
           --help || true
 
   cleanup:
@@ -143,7 +143,7 @@ jobs:
       with:
         script: |
           const owner = context.repo.owner;
-          const packageName = 'bloco-eth';
+          const packageName = 'bloco-vgen';
           
           try {
             // Get all versions of the package

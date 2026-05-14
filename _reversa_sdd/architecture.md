@@ -7,7 +7,7 @@
 
 ## Sumário executivo
 
-`bloco-wallet-generator` é uma aplicação **CLI monolítica local** escrita em Go. No legado, o binário principal (`bloco-eth`) expõe comandos para geração de carteiras vanity, análise estatística, benchmark e versão. Por decisão humana do Revisor, a nomenclatura-alvo deve usar `bloco-vanity-generator` para produto/repositório/documentação e `bloco-vgen` como binário compatível. A arquitetura é modular por pacotes: bootstrap em `cmd/`, orquestração em `internal/cli`, configuração em `internal/config`, geração criptográfica em `internal/crypto`, concorrência em `internal/worker`, interface terminal em `internal/tui` e tipos utilitários em `pkg/`. 🟢
+`bloco-wallet-generator` é uma aplicação **CLI monolítica local** escrita em Go. No legado, o binário principal (`bloco-vgen`) expõe comandos para geração de carteiras vanity, análise estatística, benchmark e versão. Por decisão humana do Revisor, a nomenclatura-alvo deve usar `bloco-vanity-generator` para produto/repositório/documentação e `bloco-vgen` como binário compatível. A arquitetura é modular por pacotes: bootstrap em `cmd/`, orquestração em `internal/cli`, configuração em `internal/config`, geração criptográfica em `internal/crypto`, concorrência em `internal/worker`, interface terminal em `internal/tui` e tipos utilitários em `pkg/`. 🟢
 
 O sistema não possui backend remoto, banco de dados, API HTTP nem fila. O estado persistente é composto por **artefatos locais**: keystores, passwords, mnemonics, logs, binários e imagens Docker gerados pelo processo ou por CI/CD.
 
@@ -26,7 +26,7 @@ O sistema não possui backend remoto, banco de dados, API HTTP nem fila. O estad
 
 | Aspecto | Classificação | Evidência | Confiança |
 |---|---|---|---:|
-| Topologia | Monólito CLI local | Um binário Go em `cmd/bloco-eth` | 🟢 |
+| Topologia | Monólito CLI local | Um binário Go em `cmd/bloco-vgen` | 🟢 |
 | Modularização | Camadas/pacotes por responsabilidade | `internal/*`, `pkg/*` | 🟢 |
 | Persistência | Filesystem local | `keystores/`, logs, Docker artifacts | 🟢 |
 | Integração externa runtime | Bibliotecas blockchain, terminal e filesystem; sem chamadas RPC obrigatórias | go.mod e código analisado | 🟢 |
@@ -37,7 +37,7 @@ O sistema não possui backend remoto, banco de dados, API HTTP nem fila. O estad
 
 ```mermaid
 flowchart LR
-  User[Operador CLI] -->|flags, stdin/sinais| App[bloco-eth CLI]
+  User[Operador CLI] -->|flags, stdin/sinais| App[bloco-vgen CLI]
   App -->|stdout/stderr| Terminal[Terminal/TUI]
   App -->|arquivos .json/.pwd/.mnemonic| FS[(Filesystem local)]
   App -->|logs sanitizados| Logs[(Arquivos de log)]
@@ -68,7 +68,7 @@ Embora seja uma aplicação CLI única, a arquitetura pode ser lida como contain
 
 | Componente | Responsabilidade | Entradas | Saídas | Confiança |
 |---|---|---|---|---:|
-| `cmd/bloco-eth` | Bootstrap, config, sinais e execução Fang. | Processo, env, sinais | Código de saída | 🟢 |
+| `cmd/bloco-vgen` | Bootstrap, config, sinais e execução Fang. | Processo, env, sinais | Código de saída | 🟢 |
 | `internal/cli.Application` | Comandos, flags, geração, stats, benchmark e keystore. | Flags Cobra | Resultados, logs, arquivos | 🟢 |
 | `internal/config.Config` | Defaults e validação operacional. | Env vars, flags mutadas | Config validada | 🟢 |
 | `internal/worker.Pool` | Fan-out concorrente e primeiro resultado vencedor. | `GenerationCriteria` | `GenerationResult`, stats | 🟢 |
@@ -86,7 +86,7 @@ Embora seja uma aplicação CLI única, a arquitetura pode ser lida como contain
 ```mermaid
 sequenceDiagram
   participant U as Operador CLI
-  participant Main as cmd/bloco-eth
+  participant Main as cmd/bloco-vgen
   participant CLI as internal/cli
   participant CFG as internal/config
   participant W as internal/worker
@@ -95,7 +95,7 @@ sequenceDiagram
   participant T as internal/tui ou texto
   participant FS as Filesystem
 
-  U->>Main: executa bloco-eth com flags
+  U->>Main: executa bloco-vgen com flags
   Main->>CFG: DefaultConfig + LoadFromEnvironment + Validate
   Main->>CLI: NewApplication(cfg)
   CLI->>CLI: parseFlags + getGenerationCriteria
@@ -149,16 +149,16 @@ Não foram identificadas APIs REST/GraphQL próprias, webhooks runtime, filas, c
 Mesmo com `doc_level=completo`, o Dockerfile foi considerado para arquitetura:
 
 - Build multi-stage: `golang:1.24-alpine3.20` -> `alpine:3.20`.
-- Binário estático com `CGO_ENABLED=0` em `/app/bloco-eth`.
-- Runtime usa usuário não-root `bloco-eth` (`uid/gid 1001`).
-- Healthcheck executa `bloco-eth --help`.
+- Binário estático com `CGO_ENABLED=0` em `/app/bloco-vgen`.
+- Runtime usa usuário não-root `bloco-vgen` (`uid/gid 1001`).
+- Healthcheck executa `bloco-vgen --help`.
 - Release workflow publica binários Linux/Darwin amd64/arm64, checksums e imagem GHCR.
 
 ## Dívidas técnicas e riscos arquiteturais
 
 | ID | Dívida/Risco | Impacto | Confiança |
 |---|---|---|---:|
-| TD-001 | Nomes inconsistentes: `bloco-eth`, `bloco-wallet-generator`, `bloco-vanity-generator`. | Confusão em install, Docker, módulo e documentação. | 🟢 |
+| TD-001 | Nomes inconsistentes: `bloco-vgen`, `bloco-wallet-generator`, `bloco-vanity-generator`. | Confusão em install, Docker, módulo e documentação. | 🟢 |
 | TD-002 | `Wallet.IsValid()` assume endereço Ethereum de 40 chars e private key de 64. | Pode invalidar Bitcoin/Solana ou Ethereum com `0x`. | 🟢 |
 | TD-003 | `EncryptPrivateKeyWithKDF()` usa endereço placeholder. | KeyStore pode associar endereço incorreto em fluxo específico. | 🟢 |
 | TD-004 | Persistência Solana contém simplificação/placeholder. | Backup/import Solana incompleto ou enganoso. | 🟢 |

@@ -26,7 +26,7 @@ Funcionalidade: CI/CD, Docker, release e permissões operacionais
     Então existem binários para Linux e macOS em amd64 e arm64 quando suportado
     E existe checksum verificável para cada binário
     E o binário canônico é bloco-vgen
-    E a documentação não trata bloco-eth como nome canônico alvo
+    E a documentação não trata bloco-vgen como nome canônico alvo
 
   @paridade @critico
   Cenário: Docker usa multi-stage e runtime não-root

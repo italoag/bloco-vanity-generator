@@ -1,12 +1,12 @@
 # Caso de Uso: Inicialização da CLI, Tarefas de Implementação
 
 > Spec gerada pelo Reversa Writer.  
-> Unit pai: `cmd/bloco-eth`  
+> Unit pai: `cmd/bloco-vgen`  
 > Escala: 🟢 CONFIRMADO no código | 🟡 INFERIDO | 🔴 LACUNA
 
 ## Pré-requisitos
 
-- [ ] O módulo principal do binário foi criado em `cmd/bloco-eth`. 🟢
+- [ ] O módulo principal do binário foi criado em `cmd/bloco-vgen`. 🟢
 - [ ] A configuração central possui defaults, carregamento por ambiente e validação. 🟡
 - [ ] A aplicação CLI expõe construtor e comando raiz executável. 🟡
 - [ ] Fang está disponível ou existe equivalente capaz de executar um comando Cobra com contexto. 🟢
@@ -17,62 +17,62 @@
 > Cada tarefa referencia o arquivo do legado de onde o comportamento foi extraído.
 
 - [ ] T-01, Implementar criação de contexto cancelável como primeira etapa da inicialização.
-  - Origem no legado: `cmd/bloco-eth/main.go:24-27`
+  - Origem no legado: `cmd/bloco-vgen/main.go:24-27`
   - Critério de pronto: `main()` chama `setupGracefulShutdown()` antes de carregar configuração e registra `defer cancel()`.
   - Confiança: 🟢
 
 - [ ] T-02, Implementar variáveis globais de metadados do build.
-  - Origem no legado: `cmd/bloco-eth/main.go:17-22`
+  - Origem no legado: `cmd/bloco-vgen/main.go:17-22`
   - Critério de pronto: existem defaults `Version = "dev"`, `GitCommit = "unknown"` e `BuildTime = "unknown"` ou equivalentes documentados.
   - Confiança: 🟢
 
 - [ ] T-03, Carregar configuração padrão no início do bootstrap.
-  - Origem no legado: `cmd/bloco-eth/main.go:29-30`
+  - Origem no legado: `cmd/bloco-vgen/main.go:29-30`
   - Critério de pronto: `config.DefaultConfig()` é chamado e seu retorno é armazenado antes de qualquer validação.
   - Confiança: 🟢
 
 - [ ] T-04, Aplicar overrides de variáveis de ambiente.
-  - Origem no legado: `cmd/bloco-eth/main.go:30-31`
+  - Origem no legado: `cmd/bloco-vgen/main.go:30-31`
   - Critério de pronto: `cfg.LoadFromEnvironment()` é chamado imediatamente após criar a configuração padrão.
   - Confiança: 🟢
 
 - [ ] T-05, Validar configuração antes de instanciar a aplicação CLI.
-  - Origem no legado: `cmd/bloco-eth/main.go:33-40`
+  - Origem no legado: `cmd/bloco-vgen/main.go:33-40`
   - Critério de pronto: `cli.NewApplication(...)` só é alcançado se `cfg.Validate()` retornar `nil`.
   - Confiança: 🟢
 
 - [ ] T-06, Implementar falha bloqueante para configuração inválida.
-  - Origem no legado: `cmd/bloco-eth/main.go:33-37`
+  - Origem no legado: `cmd/bloco-vgen/main.go:33-37`
   - Critério de pronto: erro de validação escreve `Configuration error: <erro>` em `stderr` e encerra com `os.Exit(1)`.
   - Confiança: 🟢
 
 - [ ] T-07, Criar a aplicação CLI com configuração validada e metadados.
-  - Origem no legado: `cmd/bloco-eth/main.go:39-40`
+  - Origem no legado: `cmd/bloco-vgen/main.go:39-40`
   - Critério de pronto: `cli.NewApplication(cfg, Version, GitCommit, BuildTime)` recebe exatamente a configuração validada e os metadados globais.
   - Confiança: 🟢
 
 - [ ] T-08, Executar o comando raiz por Fang com contexto cancelável.
-  - Origem no legado: `cmd/bloco-eth/main.go:42-47`
+  - Origem no legado: `cmd/bloco-vgen/main.go:42-47`
   - Critério de pronto: `fang.Execute` é chamado com `ctx` e `app.GetRootCommand()`.
   - Confiança: 🟢
 
 - [ ] T-09, Configurar Fang para notificar sinais de interrupção e término.
-  - Origem no legado: `cmd/bloco-eth/main.go:46`
+  - Origem no legado: `cmd/bloco-vgen/main.go:46`
   - Critério de pronto: `fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM)` ou comportamento equivalente está presente.
   - Confiança: 🟢
 
 - [ ] T-10, Encaminhar erros de execução para tratamento centralizado.
-  - Origem no legado: `cmd/bloco-eth/main.go:47-50`
+  - Origem no legado: `cmd/bloco-vgen/main.go:47-50`
   - Critério de pronto: erro retornado por `fang.Execute` chama `handleError(err)` e encerra com código `1`.
   - Confiança: 🟢
 
 - [ ] T-11, Implementar registro de sinais no `setupGracefulShutdown()`.
-  - Origem no legado: `cmd/bloco-eth/main.go:53-58`
+  - Origem no legado: `cmd/bloco-vgen/main.go:53-58`
   - Critério de pronto: `signal.Notify` registra `os.Interrupt` e `syscall.SIGTERM` em um canal bufferizado.
   - Confiança: 🟢
 
 - [ ] T-12, Implementar goroutine de cancelamento por sinal.
-  - Origem no legado: `cmd/bloco-eth/main.go:60-64`
+  - Origem no legado: `cmd/bloco-vgen/main.go:60-64`
   - Critério de pronto: a goroutine aguarda sinal, escreve mensagem de shutdown em `stderr` e chama `cancel()`.
   - Confiança: 🟢
 

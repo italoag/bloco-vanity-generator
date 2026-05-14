@@ -11,7 +11,7 @@ Gera carteiras vanity, analisa dificuldade e executa benchmark"]
   Maintainer["Pessoa: Mantenedor
 Executa CI/CD, releases e manutenção"]
 
-  System["Sistema: bloco-eth CLI
+  System["Sistema: bloco-vgen CLI
 Gerador local de carteiras vanity multi-rede"]
 
   Terminal["Sistema externo: Terminal
@@ -53,12 +53,12 @@ gosec, govulncheck, Semgrep, Trivy"]
 
 | Origem | Destino | Relação | Protocolo/Formato | Confiança |
 |---|---|---|---|---:|
-| Operador CLI | `bloco-eth` | Executa comandos | processo local + flags | 🟢 |
-| `bloco-eth` | Terminal | Exibe resultados/TUI | stdout/stderr/ANSI | 🟢 |
-| Terminal | `bloco-eth` | Envia sinais/cancelamento | SIGINT/SIGTERM, teclado TUI | 🟢 |
-| `bloco-eth` | Filesystem | Salva keystore, password, mnemonic e logs | JSON/texto | 🟢 |
-| `bloco-eth` | Bibliotecas blockchain | Gera chaves/endereço | chamadas Go locais | 🟢 |
-| GitHub Actions | `bloco-eth` | Testa/builda/scaneia | workflows YAML | 🟢 |
+| Operador CLI | `bloco-vgen` | Executa comandos | processo local + flags | 🟢 |
+| `bloco-vgen` | Terminal | Exibe resultados/TUI | stdout/stderr/ANSI | 🟢 |
+| Terminal | `bloco-vgen` | Envia sinais/cancelamento | SIGINT/SIGTERM, teclado TUI | 🟢 |
+| `bloco-vgen` | Filesystem | Salva keystore, password, mnemonic e logs | JSON/texto | 🟢 |
+| `bloco-vgen` | Bibliotecas blockchain | Gera chaves/endereço | chamadas Go locais | 🟢 |
+| GitHub Actions | `bloco-vgen` | Testa/builda/scaneia | workflows YAML | 🟢 |
 | GitHub Actions | GHCR/Releases | Publica artefatos | Docker/Release API | 🟢 |
 
 ## Observações

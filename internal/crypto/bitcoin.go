@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
-	"bloco-eth/pkg/errors"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/errors"
+	"bloco-vgen/pkg/wallet"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"

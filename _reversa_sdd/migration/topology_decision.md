@@ -20,12 +20,12 @@ hash: "sha256:e786213874896e907e5da36d240036ba4bb9eec4d3fafe1eb35ed7fc127a94b6"
 - **Evidências**:
   - `_reversa_sdd/architecture.md` descreve o sistema como aplicação CLI monolítica local em Go, sem backend, banco, API HTTP ou fila, com bootstrap em `cmd/`, orquestração em `internal/cli`, configuração em `internal/config`, geração em `internal/crypto`, concorrência em `internal/worker`, terminal em `internal/tui` e tipos utilitários em `pkg/`.
   - `_reversa_sdd/architecture.md` classifica a topologia como monólito CLI local e a modularização como camadas/pacotes por responsabilidade.
-  - `_reversa_sdd/inventory.md` confirma 61 arquivos Go, entry point único em `cmd/bloco-eth/`, comandos em `internal/cli` e pacotes técnicos em `internal/*` e `pkg/*`.
+  - `_reversa_sdd/inventory.md` confirma 61 arquivos Go, entry point único em `cmd/bloco-vgen/`, comandos em `internal/cli` e pacotes técnicos em `internal/*` e `pkg/*`.
   - `_reversa_sdd/dependencies.md` confirma Go Modules, dependências de CLI/TUI/crypto e ausência de stack web, banco ou orquestração distribuída.
 - **Mapa da árvore legada** (resumido):
   ```text
   cmd/
-    bloco-eth/
+    bloco-vgen/
       main.go
   internal/
     cli/
@@ -141,7 +141,7 @@ Justificativa: a escolha anterior foi transformacional e a estratégia confirmad
 
 | Módulo / pasta legada | Bounded context novo | Tipo | Observações |
 |---|---|---|---|
-| `cmd/bloco-eth/` | Experiência de Comando | renomeado | Renomear entry point para `cmd/bloco-vgen/`, mantendo compatibilidade do binário alvo. |
+| `cmd/bloco-vgen/` | Experiência de Comando | renomeado | Renomear entry point para `cmd/bloco-vgen/`, mantendo compatibilidade do binário alvo. |
 | `internal/cli/` | Experiência de Comando + Casos de Uso | dividido | Separar parsing/apresentação CLI de orquestração de aplicação. |
 | `internal/config/` | Configuração Operacional | preservado com ajuste | Manter configuração local, mas com contratos explícitos para app/adapters. |
 | `internal/crypto/` + `internal/crypto/kdf/` | Criptografia Multirede + Cofre Local | dividido | Separar geração por rede, KeyStore/KDF e mnemonic para testabilidade e segurança. |

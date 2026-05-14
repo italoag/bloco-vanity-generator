@@ -80,12 +80,12 @@ jobs:
           
           ### Using Go
           ```bash
-          go install github.com/italoag/bloco-wallet-generator/cmd/bloco-eth@${{ steps.version.outputs.version }}
+          go install github.com/italoag/bloco-wallet-generator/cmd/bloco-vgen@${{ steps.version.outputs.version }}
           ```
           
           ### Docker
           ```bash
-          docker pull ghcr.io/italoag/bloco-eth:${{ steps.version.outputs.version }}
+          docker pull ghcr.io/italoag/bloco-vgen:${{ steps.version.outputs.version }}
           ```
           
           ## Verification
@@ -127,19 +127,19 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: 0
       run: |
-        export BINARY_NAME=bloco-eth        
+        export BINARY_NAME=bloco-vgen        
         mkdir -p dist
         
         go build \
           -ldflags="-w -s -X main.version=${{ needs.create-release.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           -o dist/${BINARY_NAME} \
-          ./cmd/bloco-eth
+          ./cmd/bloco-vgen
 
     - name: Create archive
       run: |
         cd dist
-        BINARY_NAME=bloco-eth
-          ARCHIVE_NAME="bloco-eth-${{ needs.create-release.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+        BINARY_NAME=bloco-vgen
+          ARCHIVE_NAME="bloco-vgen-${{ needs.create-release.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           tar -czf "${ARCHIVE_NAME}" "${BINARY_NAME}"
         echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
         echo "ARCHIVE_PATH=dist/${ARCHIVE_NAME}" >> $GITHUB_ENV
@@ -216,7 +216,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ghcr.io/${{ github.repository_owner }}/bloco-eth
+        images: ghcr.io/${{ github.repository_owner }}/bloco-vgen
         tags: |
           type=ref,event=tag
           type=semver,pattern={{version}}

@@ -233,7 +233,7 @@ O domínio alvo usa Go data-oriented e interfaces leves. Os bounded contexts nã
 
 | Elemento novo | Origem no legado | Tipo de mapeamento |
 |---|---|---|
-| AGG-01 `GenerationRequest` | `cmd/bloco-eth`, `internal/cli`, `internal/config` | dividido/fundido |
+| AGG-01 `GenerationRequest` | `cmd/bloco-vgen`, `internal/cli`, `internal/config` | dividido/fundido |
 | AGG-02 `VanityCriteria` | `pkg/wallet.GenerationCriteria`, `internal/validation`, `pkg/utils` | fundido |
 | AGG-03 `WalletGeneration` | `internal/worker`, `internal/cli` geração single/múltipla, benchmark | fundido/dividido |
 | AGG-04 `NetworkWallet` | `internal/crypto/{ethereum,bitcoin,solana}`, `pkg/wallet.Wallet` | fundido/dividido |

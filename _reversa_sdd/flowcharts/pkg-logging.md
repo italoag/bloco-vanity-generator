@@ -7,7 +7,7 @@ flowchart TD
   C -- não --> D[io.Discard]
   C -- sim --> E{OutputFile?}
   E -- vazio --> F{avoid stdout?}
-  F -- sim --> G[/tmp/bloco-eth.log or discard]
+  F -- sim --> G[/tmp/bloco-vgen.log or discard]
   F -- não --> H[stdout]
   E -- definido --> I[file writer]
   I --> J{BufferSize > 0?}

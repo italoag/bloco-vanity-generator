@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-  Main[cmd/bloco-eth main]
+  Main[cmd/bloco-vgen main]
   App[internal/cli Application]
   Cobra[Cobra root/subcommands]
   Fang[Fang executor]

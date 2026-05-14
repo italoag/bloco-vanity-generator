@@ -6,7 +6,7 @@
 
 ## Visão Geral
 
-O caso de uso `gerar-carteiras-vanity` representa o fluxo acionado pelo comando raiz `bloco-eth`, responsável por gerar uma ou mais carteiras cujo endereço satisfaça critérios informados por flags, como prefixo, sufixo, checksum, rede e uso de mnemonic. A CLI aplica flags à configuração, valida critérios, inicializa componentes cripto e worker pool, decide entre TUI e modo texto, exibe resultados e persiste keystore/mnemonic quando habilitado. 🟢
+O caso de uso `gerar-carteiras-vanity` representa o fluxo acionado pelo comando raiz `bloco-vgen`, responsável por gerar uma ou mais carteiras cujo endereço satisfaça critérios informados por flags, como prefixo, sufixo, checksum, rede e uso de mnemonic. A CLI aplica flags à configuração, valida critérios, inicializa componentes cripto e worker pool, decide entre TUI e modo texto, exibe resultados e persiste keystore/mnemonic quando habilitado. 🟢
 
 ## Responsabilidades
 
@@ -76,7 +76,7 @@ O caso de uso `gerar-carteiras-vanity` representa o fluxo acionado pelo comando 
 ## Critérios de Aceitação
 
 ```gherkin
-Dado que o usuário executa `bloco-eth` com flags válidas
+Dado que o usuário executa `bloco-vgen` com flags válidas
 Quando o comando raiz é processado
 Então as flags devem atualizar a configuração, os critérios devem ser validados e o worker pool deve iniciar
 

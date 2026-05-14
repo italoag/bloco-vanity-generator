@@ -42,7 +42,7 @@ O módulo `internal/cli` é a camada de orquestração da aplicação de linha d
 | ID | Requisito | Prioridade | Critério de Aceite |
 |----|-----------|-----------|-------------------|
 | RF-01 | Criar uma aplicação CLI com config e metadados de build. | Must | `NewApplication(cfg, version, gitCommit, buildTime)` preenche `Application` e chama `setupCommands()`. 🟢 |
-| RF-02 | Configurar comando raiz `bloco-eth` para geração padrão. | Must | `rootCmd.RunE` aponta para `app.generateWallet`. 🟢 |
+| RF-02 | Configurar comando raiz `bloco-vgen` para geração padrão. | Must | `rootCmd.RunE` aponta para `app.generateWallet`. 🟢 |
 | RF-03 | Registrar flags globais de geração. | Must | Flags `prefix`, `suffix`, `checksum`, `case-sensitive`, `count`, `with-mnemonic`, `network` existem. 🟢 |
 | RF-04 | Registrar flags de performance e UI. | Must | Flags `threads`, `progress` e `tui` existem. 🟢 |
 | RF-05 | Registrar flags de keystore e KDF. | Must | Flags `keystore-dir`, `no-keystore`, `keystore-kdf`, `kdf-params`, `kdf-analysis`, `security-level` existem. 🟢 |

@@ -1,7 +1,7 @@
 # language: pt
 # spec-id: PT-001
 # rastreabilidade:
-#   process_flows: _reversa_sdd/code-analysis.md § Fluxo principal de geração; _reversa_sdd/flowcharts/cmd-bloco-eth.md; _reversa_sdd/flowcharts/internal-cli.md
+#   process_flows: _reversa_sdd/code-analysis.md § Fluxo principal de geração; _reversa_sdd/flowcharts/cmd-bloco-vgen.md; _reversa_sdd/flowcharts/internal-cli.md
 #   target_architecture: target_architecture.md BC-01 Experiência de Comando; BC-02 Configuração Operacional; AD-01; AD-02
 #   target_domain_model: AGG-01 GenerationRequest
 #   paradigma_alvo: CSP/goroutines Go com procedural estruturado e interfaces leves

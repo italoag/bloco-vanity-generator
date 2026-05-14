@@ -1,8 +1,8 @@
 # Bloco Wallet Generator Makefile
 
 # Variables
-BINARY_NAME=bloco-eth
-SOURCE_FILE=./cmd/bloco-eth/main.go
+BINARY_NAME=bloco-vgen
+SOURCE_FILE=./cmd/bloco-vgen/main.go
 TEST_FILE=main_test.go
 
 # Go parameters

@@ -30,7 +30,7 @@ hash: "sha256:578cc3b9a58b600448c34987ddf17b005535c9e58c588185f35d32fbf29fd22e"
 | `keystores/<address>.mnemonic` | `keystores/<address>.mnemonic` | preservação | Arquivo sensível; manter permissões e não sobrescrever silenciosamente. |
 | `keystores/<address>.key` Solana bruto | `SolanaSecureArtifactFile` | substituição/conversão opcional | Não gerar novos `.key`; conversão de legado deve ser explícita e local, se implementada. |
 | `wallets-YYYYMMDD.log` legado com private key | `SanitizedLogFile` | substituição | Não migrar conteúdo inseguro automaticamente; começar logs novos sanitizados. |
-| release assets `bloco-eth` | release assets `bloco-vgen` | renomeação | Distribuição muda nome do binário, mantendo compatibilidade documentada. |
+| release assets `bloco-vgen` | release assets `bloco-vgen` | renomeação | Distribuição muda nome do binário, mantendo compatibilidade documentada. |
 
 ## Transformações
 

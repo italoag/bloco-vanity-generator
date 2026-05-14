@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"bloco-eth/internal/config"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/internal/config"
+	"bloco-vgen/pkg/wallet"
 )
 
 // TestPool_SecureLoggingIntegration tests that the pool correctly uses SecureLogger
@@ -143,11 +143,11 @@ func TestPool_SecureLoggingErrorHandling(t *testing.T) {
 	}
 
 	// Test cancellation error logging
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	criteria := wallet.GenerationCriteria{
-		Prefix:     "aaaa", // Very difficult pattern to force timeout
+		Prefix:     "aaaaaaaaaaaaaaaaaaaa", // Very difficult pattern to force timeout
 		Suffix:     "",
 		IsChecksum: false,
 	}

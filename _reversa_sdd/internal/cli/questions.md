@@ -31,7 +31,7 @@ Este arquivo reúne perguntas de validação humana para pontos da CLI em que o 
 
 | ID | Pergunta | Contexto | Impacto | Confiança |
 |---|---|---|---|---:|
-| Q-CLI-011 | O nome de produto exibido deve ser `Bloco-ETH`, `bloco-eth`, `Bloco Vanity Generator` ou `bloco-wallet-generator`? | O código e artefatos anteriores registram nomes inconsistentes. | Afeta ajuda CLI, releases, Docker, documentação e onboarding. | 🟢 |
+| Q-CLI-011 | O nome de produto exibido deve ser `Bloco-ETH`, `bloco-vgen`, `Bloco Vanity Generator` ou `bloco-wallet-generator`? | O código e artefatos anteriores registram nomes inconsistentes. | Afeta ajuda CLI, releases, Docker, documentação e onboarding. | 🟢 |
 | Q-CLI-012 | A TUI deve ser padrão quando terminal suporta ou depender sempre de `--progress`? | A flag `--tui` tem default `true`, mas geração só usa TUI quando `--progress` está ativo. | Afeta expectativa de UX para usuários que não passam `--progress`. | 🟢 |
 | Q-CLI-013 | Warnings de keystore devem ir para stdout ou stderr? | O código usa `fmt.Printf` em alguns warnings e `fmt.Fprintf(os.Stderr, ...)` em warnings de shutdown. | Afeta automações que parseiam stdout. | 🟡 |
 | Q-CLI-014 | O subcomando `stats` deve respeitar `--network`? | `showStats()` usa `getGenerationCriteria()`, mas o comando `stats` declara apenas prefix/suffix/checksum como flags próprias. | Pode afetar análise para Bitcoin/Solana se a rede for relevante. | 🟡 |

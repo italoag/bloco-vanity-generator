@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/wallet"
 )
 
 func TestNewPool(t *testing.T) {
@@ -206,14 +206,14 @@ func TestPool_GenerateWalletWithContext_Cancellation(t *testing.T) {
 
 	// Use a very difficult pattern that would take a long time
 	criteria := wallet.GenerationCriteria{
-		Prefix:     "aaaa", // This should take a while to find
+		Prefix:     "aaaaaaaaaaaaaaaaaaaa", // This should take a while to find
 		Suffix:     "",
 		IsChecksum: false,
 	}
 
 	// Create a context that will be cancelled quickly
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	start := time.Now()
 	result, err := pool.GenerateWalletWithContext(ctx, criteria)

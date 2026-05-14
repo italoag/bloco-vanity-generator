@@ -14,15 +14,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"bloco-eth/internal/config"
-	"bloco-eth/internal/crypto"
-	"bloco-eth/internal/crypto/kdf"
-	"bloco-eth/internal/tui"
-	"bloco-eth/internal/validation"
-	"bloco-eth/internal/worker"
-	"bloco-eth/pkg/errors"
-	"bloco-eth/pkg/utils"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/internal/config"
+	"bloco-vgen/internal/crypto"
+	"bloco-vgen/internal/crypto/kdf"
+	"bloco-vgen/internal/tui"
+	"bloco-vgen/internal/validation"
+	"bloco-vgen/internal/worker"
+	"bloco-vgen/pkg/errors"
+	"bloco-vgen/pkg/utils"
+	"bloco-vgen/pkg/wallet"
 )
 
 // Application represents the CLI application
@@ -55,7 +55,7 @@ func (app *Application) ExecuteContext(ctx context.Context) error {
 // setupCommands sets up all CLI commands
 func (app *Application) setupCommands() {
 	app.rootCmd = &cobra.Command{
-		Use:   "bloco-eth",
+		Use:   "bloco-vgen",
 		Short: "High-performance Ethereum wallet generator for custom address patterns",
 		Long: `Bloco-ETH is a high-performance CLI tool for generating Ethereum wallets 
 with custom prefixes and suffixes. It supports EIP-55 checksum validation,

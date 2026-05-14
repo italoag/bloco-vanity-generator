@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"bloco-eth/internal/cli"
-	"bloco-eth/internal/config"
-	"bloco-eth/pkg/errors"
+	"bloco-vgen/internal/cli"
+	"bloco-vgen/internal/config"
+	"bloco-vgen/pkg/errors"
 
 	"github.com/charmbracelet/fang"
 )

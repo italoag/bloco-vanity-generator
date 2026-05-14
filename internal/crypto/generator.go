@@ -1,6 +1,6 @@
 package crypto
 
-import "bloco-eth/pkg/wallet"
+import "bloco-vgen/pkg/wallet"
 
 // Generator defines the interface for wallet generation
 type Generator interface {

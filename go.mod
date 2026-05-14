@@ -1,4 +1,4 @@
-module bloco-eth
+module bloco-vgen
 
 go 1.25.9
 

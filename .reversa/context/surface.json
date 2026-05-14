@@ -68,7 +68,7 @@
   "package_manager": "go modules",
   "entry_points": [
     {
-      "path": "cmd/bloco-eth/main.go",
+      "path": "cmd/bloco-vgen/main.go",
       "type": "cli_entry"
     },
     {
@@ -101,7 +101,7 @@
   "test_framework": "go test",
   "test_file_count": 24,
   "modules": [
-    "cmd/bloco-eth",
+    "cmd/bloco-vgen",
     "internal/cli",
     "internal/config",
     "internal/crypto",

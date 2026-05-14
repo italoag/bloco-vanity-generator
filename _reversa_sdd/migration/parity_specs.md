@@ -108,7 +108,7 @@ Como o alvo mantém Go/CSP mas muda a topologia interna, a paridade deve cobrir 
 
 | Divergência | Aceita? | Como validar |
 |---|---|---|
-| Binário muda de `bloco-eth` para `bloco-vgen` | Sim | Testar `bloco-vgen`; compatibilidade documentada. |
+| Binário muda de `bloco-vgen` para `bloco-vgen` | Sim | Testar `bloco-vgen`; compatibilidade documentada. |
 | README legado anuncia flag não confirmada | Sim | Não testar claims descartadas; ver `discard_log.md`. |
 | Prefixo/sufixo deixam de ser hex global para todas as redes | Sim | Testar validação por rede. |
 | `Wallet.IsValid()` deixa de ser Ethereum-only | Sim | Testar formatos Ethereum, Bitcoin e Solana. |

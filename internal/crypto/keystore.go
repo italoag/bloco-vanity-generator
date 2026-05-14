@@ -1,7 +1,7 @@
 package crypto
 
 import (
-	"bloco-eth/internal/crypto/kdf"
+	"bloco-vgen/internal/crypto/kdf"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"

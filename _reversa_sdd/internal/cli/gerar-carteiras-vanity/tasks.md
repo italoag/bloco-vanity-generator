@@ -6,7 +6,7 @@
 
 ## Pré-requisitos
 
-- [ ] Comando raiz Cobra `bloco-eth` configurado com `RunE: app.generateWallet`. 🟢
+- [ ] Comando raiz Cobra `bloco-vgen` configurado com `RunE: app.generateWallet`. 🟢
 - [ ] Flags globais de geração, performance, TUI, keystore, KDF e logging registradas no comando raiz. 🟢
 - [ ] `internal/config.Config` disponível e validável após mutações por flags. 🟡
 - [ ] `pkg/wallet.GenerationCriteria` disponível com método `Validate()`. 🟢

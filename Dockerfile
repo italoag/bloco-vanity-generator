@@ -3,7 +3,7 @@ ARG GO_VERSION=1.25.10
 ARG ALPINE_VERSION=3.20
 
 # Build stage
-FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
+FROM golang:${GO_VERSION}-alpine AS builder
 
 # Build arguments for version info
 ARG VERSION=dev
@@ -36,11 +36,11 @@ RUN CGO_ENABLED=0 \
     -a \
     -installsuffix cgo \
     -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${GIT_REV} -X main.date=${BUILD_DATE}" \
-    -o bloco-eth \
-    ./cmd/bloco-eth
+    -o bloco-vgen \
+    ./cmd/bloco-vgen
 
 # Verify the binary
-RUN ./bloco-eth --help
+RUN ./bloco-vgen --help
 
 # Runtime stage
 FROM alpine:${ALPINE_VERSION}
@@ -57,40 +57,40 @@ RUN apk add --no-cache \
     tzdata
 
 # Create non-root user
-RUN addgroup -g 1001 -S bloco-eth && \
-    adduser -u 1001 -S bloco-eth -G bloco-eth
+RUN addgroup -g 1001 -S bloco-vgen && \
+    adduser -u 1001 -S bloco-vgen -G bloco-vgen
 
 # Create necessary directories
-RUN mkdir -p /app /home/bloco-eth && \
-    chown -R bloco-eth:bloco-eth /app /home/bloco-eth
+RUN mkdir -p /app /home/bloco-vgen && \
+    chown -R bloco-vgen:bloco-vgen /app /home/bloco-vgen
 
 # Copy binary from builder
-COPY --from=builder /build/bloco-eth /app/bloco-eth
+COPY --from=builder /build/bloco-vgen /app/bloco-vgen
 
 # Copy CA certificates and timezone data
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
 # Set working directory
-WORKDIR /home/bloco-eth
+WORKDIR /home/bloco-vgen
 
 # Switch to non-root user
-USER bloco-eth
+USER bloco-vgen
 
 # Set environment variables
 ENV PATH="/app:${PATH}" \
-    HOME="/home/bloco-eth" \
-    USER="bloco-eth" \
+    HOME="/home/bloco-vgen" \
+    USER="bloco-vgen" \
     VERSION="${VERSION}" \
     GIT_REV="${GIT_REV}" \
     BUILD_DATE="${BUILD_DATE}"
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD bloco-eth --help || exit 1
+    CMD bloco-vgen --help || exit 1
 
 # Add labels
-LABEL org.opencontainers.image.title="bloco-eth" \
+LABEL org.opencontainers.image.title="bloco-vgen" \
     org.opencontainers.image.description="An Ethereum like Wallet Generator" \
     org.opencontainers.image.url="https://github.com/italoag/bloco-wallet-generator" \
     org.opencontainers.image.source="https://github.com/italoag/bloco-wallet-generator" \
@@ -101,5 +101,5 @@ LABEL org.opencontainers.image.title="bloco-eth" \
     org.opencontainers.image.vendor="Italo A. G."
 
 # Default command
-ENTRYPOINT ["bloco-eth"]
+ENTRYPOINT ["bloco-vgen"]
 CMD ["--help"]

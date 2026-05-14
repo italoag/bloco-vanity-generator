@@ -4,7 +4,7 @@ Data de geração: 2026-05-08T00:15:00Z
 
 ## Resumo executivo
 
-🟢 **CONFIRMADO** — O projeto é uma aplicação CLI em Go chamada `bloco-eth`, voltada à geração de carteiras/endereço vanity para Ethereum e redes relacionadas, com suporte a padrões por prefixo/sufixo, EIP-55, KeyStore V3, KDF configurável, logging seguro, TUI e processamento concorrente.
+🟢 **CONFIRMADO** — O projeto é uma aplicação CLI em Go chamada `bloco-vgen`, voltada à geração de carteiras/endereço vanity para Ethereum e redes relacionadas, com suporte a padrões por prefixo/sufixo, EIP-55, KeyStore V3, KDF configurável, logging seguro, TUI e processamento concorrente.
 
 ## Estrutura de diretórios
 
@@ -30,7 +30,7 @@ Observação: `.git`, `.reversa`, `_reversa_sdd`, `node_modules`, `dist`, `build
 
 ```text
 cmd/
-  bloco-eth/
+  bloco-vgen/
     main.go
 internal/
   cli/
@@ -78,7 +78,7 @@ specs/
 
 | Módulo | Caminho | Papel aparente |
 |---|---|---|
-| CLI principal | `cmd/bloco-eth/` | Entry point executável |
+| CLI principal | `cmd/bloco-vgen/` | Entry point executável |
 | CLI | `internal/cli/` | Definição de comandos, flags e handlers Cobra |
 | Configuração | `internal/config/` | Defaults, ambiente, validação e overrides |
 | Criptografia | `internal/crypto/` | Geração de chaves, wallets, checksum, redes e keystore |
@@ -98,13 +98,13 @@ specs/
 
 | Caminho | Tipo | Evidência |
 |---|---|---|
-| `cmd/bloco-eth/main.go` | CLI app entry | Função `main`, configuração padrão e execução do Cobra/Fang |
+| `cmd/bloco-vgen/main.go` | CLI app entry | Função `main`, configuração padrão e execução do Cobra/Fang |
 
 🟢 **CONFIRMADO** — Comandos CLI identificados em `internal/cli/commands.go`:
 
 | Comando | Papel |
 |---|---|
-| `bloco-eth` | Geração principal de wallets |
+| `bloco-vgen` | Geração principal de wallets |
 | `stats` | Análise de dificuldade/probabilidade de padrões |
 | `benchmark` | Medição de performance de geração |
 | `version` | Exibição de versão |
@@ -163,8 +163,8 @@ specs/
 
 | Estágio | Base | Função |
 |---|---|---|
-| `builder` | `golang:1.24-alpine3.20` | Download de módulos, build estático de `./cmd/bloco-eth` |
-| runtime | `alpine:3.20` | Usuário não-root, healthcheck e `ENTRYPOINT ["bloco-eth"]` |
+| `builder` | `golang:1.24-alpine3.20` | Download de módulos, build estático de `./cmd/bloco-vgen` |
+| runtime | `alpine:3.20` | Usuário não-root, healthcheck e `ENTRYPOINT ["bloco-vgen"]` |
 
 🟢 **CONFIRMADO** — Não foi identificado `docker-compose.yml`/`docker-compose.yaml`.
 

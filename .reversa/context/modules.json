@@ -2,30 +2,30 @@
   "generated_at": "2026-05-08T00:25:00Z",
   "modules": [
     {
-      "name": "cmd/bloco-eth",
-      "path": "cmd/bloco-eth",
+      "name": "cmd/bloco-vgen",
+      "path": "cmd/bloco-vgen",
       "purpose": "Ponto de entrada do binário, inicialização de contexto com cancelamento, carregamento de configuração, validação e execução do comando raiz via Fang/Cobra.",
       "primary_files": [
-        "cmd/bloco-eth/main.go"
+        "cmd/bloco-vgen/main.go"
       ],
       "functions": [
         {
           "name": "main",
-          "file": "cmd/bloco-eth/main.go",
+          "file": "cmd/bloco-vgen/main.go",
           "params": [],
           "returns": "void",
           "confidence": "confirmed"
         },
         {
           "name": "setupGracefulShutdown",
-          "file": "cmd/bloco-eth/main.go",
+          "file": "cmd/bloco-vgen/main.go",
           "params": [],
           "returns": "context.Context, context.CancelFunc",
           "confidence": "confirmed"
         },
         {
           "name": "handleError",
-          "file": "cmd/bloco-eth/main.go",
+          "file": "cmd/bloco-vgen/main.go",
           "params": [
             "err error"
           ],
@@ -37,12 +37,12 @@
       "business_rules": [
         {
           "description": "Configuração inválida encerra o processo com código 1 antes da criação da aplicação CLI.",
-          "location": "cmd/bloco-eth/main.go:33",
+          "location": "cmd/bloco-vgen/main.go:33",
           "confidence": "confirmed"
         },
         {
           "description": "Sinais os.Interrupt e SIGTERM cancelam o contexto para desligamento gracioso.",
-          "location": "cmd/bloco-eth/main.go:53",
+          "location": "cmd/bloco-vgen/main.go:53",
           "confidence": "confirmed"
         }
       ],

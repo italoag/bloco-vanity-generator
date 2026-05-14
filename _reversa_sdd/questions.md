@@ -7,10 +7,10 @@
 
 ## Pergunta 1
 
-**Contexto:** Naming transversal — `go.mod` usa módulo/imports `bloco-eth`, Dockerfile/CI geram binário `bloco-eth`, README usa exemplos `./bloco-vanity-generator`, repositório é `bloco-wallet-generator`.
+**Contexto:** Naming transversal — `go.mod` usa módulo/imports `bloco-vgen`, Dockerfile/CI geram binário `bloco-vgen`, README usa exemplos `./bloco-vanity-generator`, repositório é `bloco-wallet-generator`.
 **Spec afetada:** `_reversa_sdd/architecture.md; _reversa_sdd/traceability/spec-impact-matrix.md`
 **Pergunta:** Qual deve ser o nome canônico do produto, binário, módulo Go, imagem Docker e exemplos de documentação?
-**Impacto:** Define se a migração deve preservar `bloco-eth`, renomear para `bloco-wallet-generator`, ou manter aliases/compatibilidade. Afeta documentação, CI/CD, Docker, imports e UX da CLI.
+**Impacto:** Define se a migração deve preservar `bloco-vgen`, renomear para `bloco-wallet-generator`, ou manter aliases/compatibilidade. Afeta documentação, CI/CD, Docker, imports e UX da CLI.
 
 **Resposta:** bloco-vanity-generator para produto/repositório/documentação; bloco-vgen como binário compatível.
 

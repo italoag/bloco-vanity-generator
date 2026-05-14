@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
-	"bloco-eth/pkg/errors"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/errors"
+	"bloco-vgen/pkg/wallet"
 
 	"github.com/gagliardetto/solana-go"
 )

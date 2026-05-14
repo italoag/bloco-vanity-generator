@@ -179,7 +179,7 @@ func NewSecureLogger(config *LogConfig) (SecureLogger, error) {
 		// Check if we should avoid stdout (e.g., when TUI is active)
 		if shouldAvoidStdout() {
 			// Create a temporary log file to avoid interfering with TUI
-			tempLogFile := "/tmp/bloco-eth.log"
+			tempLogFile := "/tmp/bloco-vgen.log"
 			if err := logger.initializeFileWriterWithPath(tempLogFile); err != nil {
 				// If temp file fails, use discard to avoid TUI interference
 				logger.writer = io.Discard

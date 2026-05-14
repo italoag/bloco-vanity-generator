@@ -49,7 +49,7 @@ A decisão transformacional permite reorganizar internamente o sistema em Go idi
 
 ### BR-MIGRAR-003 — Inicialização com configuração validada
 
-- **Origem**: `_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/requirements.md` § Regras de Negócio; `_reversa_sdd/internal/config/requirements.md`
+- **Origem**: `_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/requirements.md` § Regras de Negócio; `_reversa_sdd/internal/config/requirements.md`
 - **Confiança original**: 🟢
 - **Descrição**: Configuração padrão deve ser criada antes de variáveis de ambiente/flags, e configuração inválida deve impedir a inicialização da CLI.
 - **Justificativa de migração**: Protege execução contra parâmetros inválidos antes de acionar crypto/worker.
@@ -57,7 +57,7 @@ A decisão transformacional permite reorganizar internamente o sistema em Go idi
 
 ### BR-MIGRAR-004 — Cancelamento gracioso por contexto
 
-- **Origem**: `_reversa_sdd/cmd/bloco-eth/requirements.md`; `_reversa_sdd/domain.md` BR-036
+- **Origem**: `_reversa_sdd/cmd/bloco-vgen/requirements.md`; `_reversa_sdd/domain.md` BR-036
 - **Confiança original**: 🟢
 - **Descrição**: `os.Interrupt` e `SIGTERM` devem cancelar o contexto de execução para desligamento gracioso.
 - **Justificativa de migração**: Essencial para geração concorrente longa e segura.
@@ -65,7 +65,7 @@ A decisão transformacional permite reorganizar internamente o sistema em Go idi
 
 ### BR-MIGRAR-005 — Erros estruturados e debug controlado
 
-- **Origem**: `_reversa_sdd/cmd/bloco-eth/requirements.md`; `_reversa_sdd/pkg/errors/requirements.md`
+- **Origem**: `_reversa_sdd/cmd/bloco-vgen/requirements.md`; `_reversa_sdd/pkg/errors/requirements.md`
 - **Confiança original**: 🟢
 - **Descrição**: Erros estruturados devem preservar tipo/contexto; stack trace só deve aparecer com `BLOCO_DEBUG`.
 - **Justificativa de migração**: Mantém UX operacional e evita exposição indevida em execução normal.
@@ -275,7 +275,7 @@ A decisão transformacional permite reorganizar internamente o sistema em Go idi
 
 | ID | Origem | Motivo curto | Vínculo a paradigma? |
 |---|---|---|---|
-| BR-DESCARTAR-001 | `_reversa_sdd/questions.md` Pergunta 1 | `bloco-eth` não é nome canônico alvo; manter no máximo compatibilidade controlada. | não |
+| BR-DESCARTAR-001 | `_reversa_sdd/questions.md` Pergunta 1 | `bloco-vgen` não é nome canônico alvo; manter no máximo compatibilidade controlada. | não |
 | BR-DESCARTAR-002 | `_reversa_sdd/questions.md` Pergunta 2 | Flags/claims apenas no README desatualizado não são contrato confirmado. | não |
 | BR-DESCARTAR-003 | `_reversa_sdd/pkg/wallet/requirements.md` | Validação hex global para prefixo/sufixo conflita com decisão multirede. | não |
 | BR-DESCARTAR-004 | `_reversa_sdd/pkg/wallet/requirements.md` | `Wallet.IsValid()` centrado em Ethereum conflita com decisão por rede. | não |

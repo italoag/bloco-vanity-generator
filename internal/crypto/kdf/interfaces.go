@@ -3,7 +3,7 @@ package kdf
 import (
 	"time"
 
-	"bloco-eth/pkg/logging"
+	"bloco-vgen/pkg/logging"
 )
 
 // KDFHandler interface for different types of KDF implementations
@@ -22,7 +22,7 @@ type KDFHandler interface {
 }
 
 // KDFLogger interface for logging KDF operations
-// This interface adapts to the existing bloco-eth logging system
+// This interface adapts to the existing bloco-vgen logging system
 type KDFLogger interface {
 	// LogKDFAttempt logs the start of a KDF operation with sanitized parameters
 	LogKDFAttempt(kdf string, params map[string]interface{})

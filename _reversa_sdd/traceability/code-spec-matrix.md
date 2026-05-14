@@ -7,7 +7,7 @@
 
 | Arquivo do legado | Unit correspondente | Cobertura |
 |---------|---------------------|-----------|
-| `cmd/bloco-eth/main.go` | `cmd/bloco-eth/` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `cmd/bloco-vgen/` | 🟢 |
 | `internal/cli/commands.go` | `internal/cli/` | 🟢 |
 | `internal/config/config.go` | `internal/config/` | 🟢 |
 | `internal/crypto/ethereum.go` | `internal/crypto/` | 🟢 |
@@ -44,7 +44,7 @@
 | `pkg/utils/format.go` | `pkg/utils/` | 🟢 |
 | `pkg/wallet/types.go` | `pkg/wallet/` | 🟢 |
 | `pkg/wallet/logger.go` | `pkg/wallet/` | 🟢 |
-| `cmd/bloco-eth/main.go` | `cmd/bloco-eth/`, `cmd/bloco-eth/inicializacao-da-cli/` | 🟢 |
+| `cmd/bloco-vgen/main.go` | `cmd/bloco-vgen/`, `cmd/bloco-vgen/inicializacao-da-cli/` | 🟢 |
 | `internal/cli/commands.go` | `internal/cli/`, `internal/cli/gerar-carteiras-vanity/`, `internal/cli/salvar-keystore/` | 🟢 |
 | `.github/workflows/*.yaml` | `traceability/spec-impact-matrix.md` | 🟡 |
 | `keystores/` | `internal/cli/salvar-keystore/`, `internal/crypto/gerar-keystore-v3/` | 🟢 |

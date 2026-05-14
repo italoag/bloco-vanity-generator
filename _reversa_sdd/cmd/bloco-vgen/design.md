@@ -1,11 +1,11 @@
-# Módulo cmd/bloco-eth, Design Técnico
+# Módulo cmd/bloco-vgen, Design Técnico
 
 > Spec gerada pelo Reversa Writer.  
 > Escala: 🟢 CONFIRMADO no código | 🟡 INFERIDO | 🔴 LACUNA
 
 ## Interface
 
-O módulo expõe a interface de processo do binário `bloco-eth`. Ele não expõe API HTTP/RPC nem tipos públicos consumidos por outros pacotes; sua interface é o lifecycle do processo e as funções internas de bootstrap. 🟢
+O módulo expõe a interface de processo do binário `bloco-vgen`. Ele não expõe API HTTP/RPC nem tipos públicos consumidos por outros pacotes; sua interface é o lifecycle do processo e as funções internas de bootstrap. 🟢
 
 | Símbolo | Assinatura | Retorno | Observação |
 |---------|-----------|---------|------------|
@@ -25,21 +25,21 @@ O módulo expõe a interface de processo do binário `bloco-eth`. Ele não expõ
 
 ## Fluxo Principal
 
-1. `main()` inicia chamando `setupGracefulShutdown()` para obter `ctx` e `cancel`. 🟢 `cmd/bloco-eth/main.go:24-27`
-2. `main()` carrega `config.DefaultConfig()` e aplica `cfg.LoadFromEnvironment()`. 🟢 `cmd/bloco-eth/main.go:29-31`
-3. `main()` chama `cfg.Validate()` antes de criar a aplicação CLI. 🟢 `cmd/bloco-eth/main.go:33-37`
-4. Se a configuração é válida, `main()` cria `cli.NewApplication(cfg, Version, GitCommit, BuildTime)`. 🟢 `cmd/bloco-eth/main.go:39-40`
-5. `main()` chama `fang.Execute(ctx, app.GetRootCommand(), fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM))`. 🟢 `cmd/bloco-eth/main.go:42-47`
+1. `main()` inicia chamando `setupGracefulShutdown()` para obter `ctx` e `cancel`. 🟢 `cmd/bloco-vgen/main.go:24-27`
+2. `main()` carrega `config.DefaultConfig()` e aplica `cfg.LoadFromEnvironment()`. 🟢 `cmd/bloco-vgen/main.go:29-31`
+3. `main()` chama `cfg.Validate()` antes de criar a aplicação CLI. 🟢 `cmd/bloco-vgen/main.go:33-37`
+4. Se a configuração é válida, `main()` cria `cli.NewApplication(cfg, Version, GitCommit, BuildTime)`. 🟢 `cmd/bloco-vgen/main.go:39-40`
+5. `main()` chama `fang.Execute(ctx, app.GetRootCommand(), fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM))`. 🟢 `cmd/bloco-vgen/main.go:42-47`
 6. Se `fang.Execute` retorna `nil`, o processo termina sem chamada explícita a `os.Exit`. 🟢
-7. Se `fang.Execute` retorna erro, `main()` chama `handleError(err)` e encerra com `os.Exit(1)`. 🟢 `cmd/bloco-eth/main.go:47-50`
+7. Se `fang.Execute` retorna erro, `main()` chama `handleError(err)` e encerra com `os.Exit(1)`. 🟢 `cmd/bloco-vgen/main.go:47-50`
 
 ## Fluxos Alternativos
 
-- **Configuração inválida:** se `cfg.Validate()` retorna erro, o módulo escreve `Configuration error: <erro>` em `stderr` e encerra imediatamente com `os.Exit(1)`. 🟢 `cmd/bloco-eth/main.go:33-37`
-- **Sinal de interrupção:** `setupGracefulShutdown()` mantém uma goroutine bloqueada em `sigChan`; ao receber sinal, escreve mensagem de shutdown em `stderr` e chama `cancel()`. 🟢 `cmd/bloco-eth/main.go:57-64`
-- **Erro estruturado:** `handleError()` faz type assertion para `*errors.BlocoError`, imprime `blocoErr.Error()` e lista `Context` quando houver. 🟢 `cmd/bloco-eth/main.go:70-81`
-- **Stack trace em debug:** se `BLOCO_DEBUG` estiver definido e `BlocoError.Stack` não estiver vazio, cada frame é impresso. 🟢 `cmd/bloco-eth/main.go:83-89`
-- **Erro genérico:** se o erro não é `*errors.BlocoError`, `handleError()` imprime `Error: <erro>`. 🟢 `cmd/bloco-eth/main.go:90-93`
+- **Configuração inválida:** se `cfg.Validate()` retorna erro, o módulo escreve `Configuration error: <erro>` em `stderr` e encerra imediatamente com `os.Exit(1)`. 🟢 `cmd/bloco-vgen/main.go:33-37`
+- **Sinal de interrupção:** `setupGracefulShutdown()` mantém uma goroutine bloqueada em `sigChan`; ao receber sinal, escreve mensagem de shutdown em `stderr` e chama `cancel()`. 🟢 `cmd/bloco-vgen/main.go:57-64`
+- **Erro estruturado:** `handleError()` faz type assertion para `*errors.BlocoError`, imprime `blocoErr.Error()` e lista `Context` quando houver. 🟢 `cmd/bloco-vgen/main.go:70-81`
+- **Stack trace em debug:** se `BLOCO_DEBUG` estiver definido e `BlocoError.Stack` não estiver vazio, cada frame é impresso. 🟢 `cmd/bloco-vgen/main.go:83-89`
+- **Erro genérico:** se o erro não é `*errors.BlocoError`, `handleError()` imprime `Error: <erro>`. 🟢 `cmd/bloco-vgen/main.go:90-93`
 
 ## Dependências
 
@@ -53,12 +53,12 @@ O módulo expõe a interface de processo do binário `bloco-eth`. Ele não expõ
 
 | Decisão | Evidência no código | Confiança |
 |---------|---------------------|-----------|
-| Centralizar bootstrap no pacote `main` e delegar comportamento de domínio para `internal/cli`. | `cmd/bloco-eth/main.go:39-47` | 🟢 |
-| Validar configuração antes de construir a aplicação CLI. | `cmd/bloco-eth/main.go:29-40` | 🟢 |
-| Usar `context.Context` como mecanismo de cancelamento cross-cutting. | `cmd/bloco-eth/main.go:24-27`, `cmd/bloco-eth/main.go:53-67` | 🟢 |
-| Usar Fang sobre Cobra para execução com animações/sinais. | `cmd/bloco-eth/main.go:42-47` | 🟢 |
-| Habilitar stack trace por variável de ambiente em vez de exibir sempre. | `cmd/bloco-eth/main.go:83-89` | 🟢 |
-| Injetar versão, commit e build time por variáveis globais definidas no build. | `cmd/bloco-eth/main.go:17-22`; `Dockerfile:35-39`; `.github/workflows/ci.yaml:178-181` | 🟢 |
+| Centralizar bootstrap no pacote `main` e delegar comportamento de domínio para `internal/cli`. | `cmd/bloco-vgen/main.go:39-47` | 🟢 |
+| Validar configuração antes de construir a aplicação CLI. | `cmd/bloco-vgen/main.go:29-40` | 🟢 |
+| Usar `context.Context` como mecanismo de cancelamento cross-cutting. | `cmd/bloco-vgen/main.go:24-27`, `cmd/bloco-vgen/main.go:53-67` | 🟢 |
+| Usar Fang sobre Cobra para execução com animações/sinais. | `cmd/bloco-vgen/main.go:42-47` | 🟢 |
+| Habilitar stack trace por variável de ambiente em vez de exibir sempre. | `cmd/bloco-vgen/main.go:83-89` | 🟢 |
+| Injetar versão, commit e build time por variáveis globais definidas no build. | `cmd/bloco-vgen/main.go:17-22`; `Dockerfile:35-39`; `.github/workflows/ci.yaml:178-181` | 🟢 |
 
 ## Estado Interno
 
@@ -72,9 +72,9 @@ O módulo expõe a interface de processo do binário `bloco-eth`. Ele não expõ
 
 ## Observabilidade
 
-- Erros de configuração são emitidos em `stderr` com prefixo `Configuration error`. 🟢 `cmd/bloco-eth/main.go:35`
-- Sinais de interrupção emitem `Received interrupt signal, shutting down gracefully...` em `stderr`. 🟢 `cmd/bloco-eth/main.go:62`
-- Erros estruturados emitem mensagem principal, contexto e stack trace condicional. 🟢 `cmd/bloco-eth/main.go:70-89`
+- Erros de configuração são emitidos em `stderr` com prefixo `Configuration error`. 🟢 `cmd/bloco-vgen/main.go:35`
+- Sinais de interrupção emitem `Received interrupt signal, shutting down gracefully...` em `stderr`. 🟢 `cmd/bloco-vgen/main.go:62`
+- Erros estruturados emitem mensagem principal, contexto e stack trace condicional. 🟢 `cmd/bloco-vgen/main.go:70-89`
 - O módulo não registra logs via `pkg/logging`; ele usa diretamente `fmt.Fprintf(os.Stderr, ...)`. 🟢
 
 ## Riscos e Lacunas
@@ -87,7 +87,7 @@ O módulo expõe a interface de processo do binário `bloco-eth`. Ele não expõ
 
 | Contrato | Consumidor/Fornecedor | Condição | Confiança |
 |---|---|---|---:|
-| `config.DefaultConfig()` deve retornar config inicializável. | `cmd/bloco-eth` consome `internal/config` | Chamado antes de `LoadFromEnvironment`. | 🟢 |
-| `cfg.Validate()` deve retornar erro para configuração inválida. | `cmd/bloco-eth` consome `internal/config` | Erro causa exit code `1`. | 🟢 |
-| `cli.NewApplication(...).GetRootCommand()` deve retornar comando Cobra válido. | `cmd/bloco-eth` consome `internal/cli` | Passado diretamente a `fang.Execute`. | 🟢 |
-| `errors.BlocoError` deve expor `Context` e `Stack`. | `cmd/bloco-eth` consome `pkg/errors` | Campos lidos diretamente em `handleError`. | 🟢 |
+| `config.DefaultConfig()` deve retornar config inicializável. | `cmd/bloco-vgen` consome `internal/config` | Chamado antes de `LoadFromEnvironment`. | 🟢 |
+| `cfg.Validate()` deve retornar erro para configuração inválida. | `cmd/bloco-vgen` consome `internal/config` | Erro causa exit code `1`. | 🟢 |
+| `cli.NewApplication(...).GetRootCommand()` deve retornar comando Cobra válido. | `cmd/bloco-vgen` consome `internal/cli` | Passado diretamente a `fang.Execute`. | 🟢 |
+| `errors.BlocoError` deve expor `Context` e `Stack`. | `cmd/bloco-vgen` consome `pkg/errors` | Campos lidos diretamente em `handleError`. | 🟢 |

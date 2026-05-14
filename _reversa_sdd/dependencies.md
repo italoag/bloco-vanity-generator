@@ -8,10 +8,10 @@ Data de geração: 2026-05-08T00:15:00Z
 
 | Item | Valor | Fonte |
 |---|---|---|
-| Módulo | `bloco-eth` | `go.mod` |
+| Módulo | `bloco-vgen` | `go.mod` |
 | Versão Go | `1.24.3` | `go.mod` |
 | Gerenciador | Go Modules | `go.mod`, `go.sum`, `Makefile` |
-| Binário | `bloco-eth` | `Makefile`, `Dockerfile`, `cmd/bloco-eth/main.go` |
+| Binário | `bloco-vgen` | `Makefile`, `Dockerfile`, `cmd/bloco-vgen/main.go` |
 
 ## Dependências diretas
 

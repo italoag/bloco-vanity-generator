@@ -1,4 +1,4 @@
-# Módulo cmd/bloco-eth, Tarefas de Implementação
+# Módulo cmd/bloco-vgen, Tarefas de Implementação
 
 > Spec gerada pelo Reversa Writer.  
 > Escala: 🟢 CONFIRMADO no código | 🟡 INFERIDO | 🔴 LACUNA
@@ -15,68 +15,68 @@
 
 > Cada tarefa referencia o arquivo do legado de onde o comportamento foi extraído.
 
-- [ ] T-01, Criar o pacote `main` do binário `bloco-eth` com imports de contexto, saída padrão de erro, sinais do SO, configuração, CLI, erros estruturados e Fang.
-  - Origem no legado: `cmd/bloco-eth/main.go:1-15`
+- [ ] T-01, Criar o pacote `main` do binário `bloco-vgen` com imports de contexto, saída padrão de erro, sinais do SO, configuração, CLI, erros estruturados e Fang.
+  - Origem no legado: `cmd/bloco-vgen/main.go:1-15`
   - Critério de pronto: o entrypoint compila e consegue referenciar `internal/config`, `internal/cli`, `pkg/errors` e `fang.Execute`.
   - Confiança: 🟢
 
 - [ ] T-02, Declarar variáveis globais de versão com defaults seguros para ambiente de desenvolvimento.
-  - Origem no legado: `cmd/bloco-eth/main.go:17-22`
+  - Origem no legado: `cmd/bloco-vgen/main.go:17-22`
   - Critério de pronto: `Version` tem default `dev`, `GitCommit` tem default `unknown` e `BuildTime` tem default `unknown`.
   - Confiança: 🟢
 
 - [ ] T-03, Implementar `main()` iniciando por `setupGracefulShutdown()` e garantindo `defer cancel()`.
-  - Origem no legado: `cmd/bloco-eth/main.go:24-27`
+  - Origem no legado: `cmd/bloco-vgen/main.go:24-27`
   - Critério de pronto: o contexto cancelável é criado antes de qualquer carregamento de configuração e o cancelamento é deferido.
   - Confiança: 🟢
 
 - [ ] T-04, Carregar configuração padrão e aplicar variáveis de ambiente antes da validação.
-  - Origem no legado: `cmd/bloco-eth/main.go:29-31`
+  - Origem no legado: `cmd/bloco-vgen/main.go:29-31`
   - Critério de pronto: `config.DefaultConfig()` é chamado e o retorno recebe `LoadFromEnvironment()` antes de `Validate()`.
   - Confiança: 🟢
 
 - [ ] T-05, Validar configuração e encerrar com erro operacional quando inválida.
-  - Origem no legado: `cmd/bloco-eth/main.go:33-37`
+  - Origem no legado: `cmd/bloco-vgen/main.go:33-37`
   - Critério de pronto: se `cfg.Validate()` retorna erro, `stderr` contém `Configuration error: <erro>` e o processo encerra com código `1`.
   - Confiança: 🟢
 
 - [ ] T-06, Instanciar a aplicação CLI com configuração e metadados de build.
-  - Origem no legado: `cmd/bloco-eth/main.go:39-40`
+  - Origem no legado: `cmd/bloco-vgen/main.go:39-40`
   - Critério de pronto: `cli.NewApplication(cfg, Version, GitCommit, BuildTime)` é chamado somente depois de configuração válida.
   - Confiança: 🟢
 
 - [ ] T-07, Executar o comando raiz via Fang com contexto e notificação de sinais.
-  - Origem no legado: `cmd/bloco-eth/main.go:42-47`
+  - Origem no legado: `cmd/bloco-vgen/main.go:42-47`
   - Critério de pronto: `fang.Execute` recebe `ctx`, `app.GetRootCommand()` e `fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM)`.
   - Confiança: 🟢
 
 - [ ] T-08, Tratar erro de execução CLI com formatação centralizada e exit code não-zero.
-  - Origem no legado: `cmd/bloco-eth/main.go:47-50`
+  - Origem no legado: `cmd/bloco-vgen/main.go:47-50`
   - Critério de pronto: se `fang.Execute` retorna erro, `handleError(err)` é invocado antes de `os.Exit(1)`.
   - Confiança: 🟢
 
 - [ ] T-09, Implementar `setupGracefulShutdown()` com `context.WithCancel` e canal de sinal bufferizado.
-  - Origem no legado: `cmd/bloco-eth/main.go:53-58`
+  - Origem no legado: `cmd/bloco-vgen/main.go:53-58`
   - Critério de pronto: a função retorna `context.Context` e `context.CancelFunc`, cria `sigChan` com buffer `1` e registra `os.Interrupt` e `syscall.SIGTERM`.
   - Confiança: 🟢
 
 - [ ] T-10, Implementar goroutine de desligamento gracioso baseada em sinal.
-  - Origem no legado: `cmd/bloco-eth/main.go:60-64`
+  - Origem no legado: `cmd/bloco-vgen/main.go:60-64`
   - Critério de pronto: a goroutine aguarda um sinal, escreve mensagem de shutdown em `stderr` e chama `cancel()`.
   - Confiança: 🟢
 
 - [ ] T-11, Implementar `handleError()` com suporte a `*errors.BlocoError`.
-  - Origem no legado: `cmd/bloco-eth/main.go:69-81`
+  - Origem no legado: `cmd/bloco-vgen/main.go:69-81`
   - Critério de pronto: erros estruturados são identificados por type assertion, a mensagem principal é impressa e todo `Context` é listado quando presente.
   - Confiança: 🟢
 
 - [ ] T-12, Implementar exibição condicional de stack trace por `BLOCO_DEBUG`.
-  - Origem no legado: `cmd/bloco-eth/main.go:83-89`
+  - Origem no legado: `cmd/bloco-vgen/main.go:83-89`
   - Critério de pronto: stack trace só aparece quando `os.Getenv("BLOCO_DEBUG") != ""` e o erro estruturado possui frames.
   - Confiança: 🟢
 
 - [ ] T-13, Implementar fallback de erro genérico.
-  - Origem no legado: `cmd/bloco-eth/main.go:90-93`
+  - Origem no legado: `cmd/bloco-vgen/main.go:90-93`
   - Critério de pronto: erros que não são `*errors.BlocoError` são impressos como `Error: <erro>`.
   - Confiança: 🟢
 
@@ -107,7 +107,7 @@
 
 ## Tarefas de Migração de Dados
 
-Não aplicável. O módulo `cmd/bloco-eth` não manipula banco de dados nem migração de dados persistentes. 🟢
+Não aplicável. O módulo `cmd/bloco-vgen` não manipula banco de dados nem migração de dados persistentes. 🟢
 
 ## Ordem Sugerida
 

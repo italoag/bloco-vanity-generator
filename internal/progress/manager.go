@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"bloco-eth/internal/worker"
-	"bloco-eth/pkg/utils"
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/internal/worker"
+	"bloco-vgen/pkg/utils"
+	"bloco-vgen/pkg/wallet"
 )
 
 // AggregatedStats holds aggregated statistics from all worker threads

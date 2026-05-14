@@ -1,10 +1,10 @@
 # KDF Configuration Examples
 
-This document provides comprehensive examples for configuring Key Derivation Functions (KDF) in bloco-eth, including security recommendations and client-specific configurations.
+This document provides comprehensive examples for configuring Key Derivation Functions (KDF) in bloco-vgen, including security recommendations and client-specific configurations.
 
 ## Overview
 
-The Universal KDF system in bloco-eth supports multiple KDF algorithms with comprehensive parameter validation and compatibility analysis. This ensures maximum compatibility with Ethereum clients while maintaining appropriate security levels.
+The Universal KDF system in bloco-vgen supports multiple KDF algorithms with comprehensive parameter validation and compatibility analysis. This ensures maximum compatibility with Ethereum clients while maintaining appropriate security levels.
 
 ## Supported KDF Algorithms
 
@@ -27,7 +27,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 #### Scrypt Configuration
 ```bash
 # Generate keystore with high-security scrypt parameters
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -51,7 +51,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 #### PBKDF2 High Security Configuration
 ```bash
 # Generate keystore with high-security PBKDF2 parameters
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 600000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -75,7 +75,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 #### Scrypt Balanced Configuration
 ```bash
 # Generate keystore with balanced scrypt parameters
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 131072,
   "r": 8,
   "p": 1,
@@ -93,7 +93,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 #### PBKDF2 Balanced Configuration
 ```bash
 # Generate keystore with balanced PBKDF2 parameters
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -112,7 +112,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 #### Scrypt Fast Configuration
 ```bash
 # Generate keystore with fast scrypt parameters (development only)
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 4096,
   "r": 8,
   "p": 1,
@@ -132,7 +132,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 #### PBKDF2 Fast Configuration
 ```bash
 # Generate keystore with fast PBKDF2 parameters (development only)
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 10000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -146,7 +146,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Geth (Go Ethereum) Optimized
 ```bash
 # Geth-optimized configuration (default geth parameters)
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -159,7 +159,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Besu Optimized
 ```bash
 # Besu-compatible configuration
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -172,7 +172,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Anvil (Foundry) Optimized
 ```bash
 # Anvil-compatible configuration (supports both scrypt and PBKDF2)
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 262144,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -184,7 +184,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Reth Optimized
 ```bash
 # Reth-compatible configuration
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -197,7 +197,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Hyperledger Firefly Optimized
 ```bash
 # Firefly-compatible configuration (prefers PBKDF2)
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 100000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -211,7 +211,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Ultra-High Security (Enterprise/Long-term Storage)
 ```bash
 # Maximum security configuration
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 1048576,
   "r": 8,
   "p": 1,
@@ -228,7 +228,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### High Security (Production Default)
 ```bash
 # Production-ready configuration
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -245,7 +245,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Balanced (Development/Testing)
 ```bash
 # Balanced configuration
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 65536,
   "r": 8,
   "p": 1,
@@ -262,7 +262,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Fast (Development Only)
 ```bash
 # Fast configuration (development only)
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 50000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -280,7 +280,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Custom Salt Length
 ```bash
 # Generate keystore with custom salt length
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -292,7 +292,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Multi-Hash PBKDF2
 ```bash
 # Use SHA-512 instead of SHA-256
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha512",
   "dklen": 32
@@ -302,7 +302,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ### Compatibility Analysis
 ```bash
 # Generate keystore with compatibility analysis
-./bloco-eth --prefix abc --kdf-analysis --security-level high
+./bloco-vgen --prefix abc --kdf-analysis --security-level high
 ```
 
 **Output includes:**
@@ -317,7 +317,7 @@ The Universal KDF system in bloco-eth supports multiple KDF algorithms with comp
 ```bash
 # Fast generation for development
 export BLOCO_KDF_PRESET=development
-./bloco-eth --prefix abc
+./bloco-vgen --prefix abc
 ```
 
 **Preset Parameters:**
@@ -329,7 +329,7 @@ export BLOCO_KDF_PRESET=development
 ```bash
 # Balanced parameters for testing
 export BLOCO_KDF_PRESET=testing
-./bloco-eth --prefix abc
+./bloco-vgen --prefix abc
 ```
 
 **Preset Parameters:**
@@ -341,7 +341,7 @@ export BLOCO_KDF_PRESET=testing
 ```bash
 # High security for production
 export BLOCO_KDF_PRESET=production
-./bloco-eth --prefix abc
+./bloco-vgen --prefix abc
 ```
 
 **Preset Parameters:**
@@ -353,7 +353,7 @@ export BLOCO_KDF_PRESET=production
 ```bash
 # Maximum security for enterprise
 export BLOCO_KDF_PRESET=enterprise
-./bloco-eth --prefix abc
+./bloco-vgen --prefix abc
 ```
 
 **Preset Parameters:**
@@ -366,7 +366,7 @@ export BLOCO_KDF_PRESET=enterprise
 ### Generate Multiple Keystores with Different Security Levels
 ```bash
 # Generate 5 keystores with high security
-./bloco-eth --prefix abc --count 5 --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --count 5 --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -374,7 +374,7 @@ export BLOCO_KDF_PRESET=enterprise
 }'
 
 # Generate 10 keystores with balanced security
-./bloco-eth --prefix def --count 10 --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix def --count 10 --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -384,7 +384,7 @@ export BLOCO_KDF_PRESET=enterprise
 ### Mixed KDF Generation
 ```bash
 # Generate with automatic KDF selection based on security level
-./bloco-eth --prefix abc --count 3 --security-level high --auto-kdf
+./bloco-vgen --prefix abc --count 3 --security-level high --auto-kdf
 ```
 
 ## Validation and Testing
@@ -392,7 +392,7 @@ export BLOCO_KDF_PRESET=enterprise
 ### Validate KDF Parameters
 ```bash
 # Validate parameters before generation
-./bloco-eth --validate-kdf --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --validate-kdf --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -403,15 +403,15 @@ export BLOCO_KDF_PRESET=enterprise
 ### Test Client Compatibility
 ```bash
 # Test generated keystore with specific client
-./bloco-eth --prefix abc --test-client geth
-./bloco-eth --prefix abc --test-client besu
-./bloco-eth --prefix abc --test-client anvil
+./bloco-vgen --prefix abc --test-client geth
+./bloco-vgen --prefix abc --test-client besu
+./bloco-vgen --prefix abc --test-client anvil
 ```
 
 ### Benchmark KDF Performance
 ```bash
 # Benchmark different KDF configurations
-./bloco-eth benchmark-kdf --kdf scrypt --params '{
+./bloco-vgen benchmark-kdf --kdf scrypt --params '{
   "n": [65536, 131072, 262144],
   "r": [8],
   "p": [1],
@@ -445,7 +445,7 @@ export BLOCO_KDF_PRESET=enterprise
 ### Security Validation
 ```bash
 # Validate security level of generated keystore
-./bloco-eth --analyze-security ./keystores/0xabc123....json
+./bloco-vgen --analyze-security ./keystores/0xabc123....json
 ```
 
 **Output includes:**
@@ -460,7 +460,7 @@ export BLOCO_KDF_PRESET=enterprise
 ```bash
 # Error: Memory usage would exceed 2GB limit
 # Solution: Reduce n parameter
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 131072,
   "r": 8,
   "p": 1,
@@ -472,7 +472,7 @@ export BLOCO_KDF_PRESET=enterprise
 ```bash
 # Error: n must be power of 2
 # Solution: Use valid power of 2 values
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -483,7 +483,7 @@ export BLOCO_KDF_PRESET=enterprise
 ### Client Compatibility Issues
 ```bash
 # Check compatibility before generation
-./bloco-eth --prefix abc --check-compatibility --target-client geth
+./bloco-vgen --prefix abc --check-compatibility --target-client geth
 ```
 
-This comprehensive guide covers all aspects of KDF configuration in bloco-eth, from basic usage to advanced enterprise configurations. Choose the appropriate security level based on your use case and performance requirements.
+This comprehensive guide covers all aspects of KDF configuration in bloco-vgen, from basic usage to advanced enterprise configurations. Choose the appropriate security level based on your use case and performance requirements.

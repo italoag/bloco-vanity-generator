@@ -172,18 +172,18 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: 0
       run: |
-        export BINARY_NAME=bloco-eth
+        export BINARY_NAME=bloco-vgen
         mkdir -p dist
         
         go build \
           -ldflags="-w -s -X main.version=${{ steps.version.outputs.VERSION }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           -o dist/${BINARY_NAME} \
-          ./cmd/bloco-eth
+          ./cmd/bloco-vgen
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bloco-eth-${{ matrix.goos }}-${{ matrix.goarch }}
+        name: bloco-vgen-${{ matrix.goos }}-${{ matrix.goarch }}
         path: dist/*
 
   validate:

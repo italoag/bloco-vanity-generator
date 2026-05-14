@@ -1,16 +1,16 @@
 # KDF Compatibility Troubleshooting Guide
 
-This guide helps you diagnose and resolve keystore compatibility issues when using the Universal KDF system in bloco-eth.
+This guide helps you diagnose and resolve keystore compatibility issues when using the Universal KDF system in bloco-vgen.
 
 ## Quick Diagnosis
 
 ### Check Keystore Compatibility
 ```bash
 # Analyze keystore compatibility
-./bloco-eth --analyze-keystore ./keystores/0xabc123....json
+./bloco-vgen --analyze-keystore ./keystores/0xabc123....json
 
 # Check compatibility with specific client
-./bloco-eth --check-compatibility --keystore ./keystores/0xabc123....json --client geth
+./bloco-vgen --check-compatibility --keystore ./keystores/0xabc123....json --client geth
 ```
 
 ### Common Error Messages
@@ -40,13 +40,13 @@ geth account import keystore.json
 
 **Diagnosis**:
 ```bash
-./bloco-eth --analyze-keystore keystore.json
+./bloco-vgen --analyze-keystore keystore.json
 ```
 
 **Solution**: Use geth-compatible parameters
 ```bash
 # Generate geth-compatible keystore
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -59,7 +59,7 @@ geth account import keystore.json
 **Solution**: Use standard geth parameters
 ```bash
 # Geth standard configuration
-./bloco-eth --prefix abc --client-preset geth
+./bloco-vgen --prefix abc --client-preset geth
 ```
 
 ### Besu Issues
@@ -73,13 +73,13 @@ besu --key-file=keystore.json
 
 **Diagnosis**:
 ```bash
-./bloco-eth --analyze-keystore keystore.json --client besu
+./bloco-vgen --analyze-keystore keystore.json --client besu
 ```
 
 **Solution**: Use Besu-compatible format
 ```bash
 # Generate Besu-compatible keystore
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -92,7 +92,7 @@ besu --key-file=keystore.json
 **Solution**: Regenerate keystore with proper MAC
 ```bash
 # Regenerate with MAC validation
-./bloco-eth --prefix abc --validate-mac --keystore-kdf scrypt
+./bloco-vgen --prefix abc --validate-mac --keystore-kdf scrypt
 ```
 
 ### Anvil (Foundry) Issues
@@ -106,13 +106,13 @@ anvil --accounts 1 --keystore keystore.json
 
 **Diagnosis**:
 ```bash
-./bloco-eth --test-decrypt keystore.json --password password.txt
+./bloco-vgen --test-decrypt keystore.json --password password.txt
 ```
 
 **Solution**: Use Anvil-preferred PBKDF2
 ```bash
 # Generate Anvil-optimized keystore
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 262144,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -126,7 +126,7 @@ anvil --accounts 1 --keystore keystore.json
 **Solution**: Ensure proper V3 format
 ```bash
 # Generate standard V3 keystore
-./bloco-eth --prefix abc --keystore-version 3 --validate-format
+./bloco-vgen --prefix abc --keystore-version 3 --validate-format
 ```
 
 #### Problem: "invalid cipher parameters"
@@ -134,7 +134,7 @@ anvil --accounts 1 --keystore keystore.json
 **Solution**: Use standard AES-128-CTR
 ```bash
 # Generate with standard cipher
-./bloco-eth --prefix abc --cipher aes-128-ctr --validate-cipher
+./bloco-vgen --prefix abc --cipher aes-128-ctr --validate-cipher
 ```
 
 ### Hyperledger Firefly Issues
@@ -144,7 +144,7 @@ anvil --accounts 1 --keystore keystore.json
 **Solution**: Use Firefly-optimized settings
 ```bash
 # Generate Firefly-compatible keystore
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 100000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -158,7 +158,7 @@ anvil --accounts 1 --keystore keystore.json
 #### Problem: "n must be power of 2"
 ```bash
 # Invalid configuration
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 100000,
   "r": 8,
   "p": 1,
@@ -170,7 +170,7 @@ anvil --accounts 1 --keystore keystore.json
 **Solution**: Use valid power of 2 values
 ```bash
 # Valid powers of 2: 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -183,7 +183,7 @@ anvil --accounts 1 --keystore keystore.json
 **Recommended**: 8
 ```bash
 # Fix invalid r parameter
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -196,7 +196,7 @@ anvil --accounts 1 --keystore keystore.json
 **Recommended**: 1
 ```bash
 # Fix invalid p parameter
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -211,7 +211,7 @@ anvil --accounts 1 --keystore keystore.json
 **Recommended**: 100000+ (production)
 ```bash
 # Fix low iteration count
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -226,7 +226,7 @@ anvil --accounts 1 --keystore keystore.json
 
 ```bash
 # Use supported PRF
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -238,7 +238,7 @@ anvil --accounts 1 --keystore keystore.json
 ### Problem: "Memory usage would exceed limit"
 ```bash
 # Error with high n parameter
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 2097152,
   "r": 8,
   "p": 1,
@@ -255,7 +255,7 @@ Memory = 128 * n * r * p bytes
 #### Reduce n parameter
 ```bash
 # Reduce from 2097152 to 1048576
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 1048576,
   "r": 8,
   "p": 1,
@@ -266,7 +266,7 @@ Memory = 128 * n * r * p bytes
 #### Use PBKDF2 instead
 ```bash
 # Switch to PBKDF2 for lower memory usage
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 600000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -276,7 +276,7 @@ Memory = 128 * n * r * p bytes
 #### Adjust system memory limit
 ```bash
 # Increase memory limit (if system allows)
-./bloco-eth --prefix abc --max-memory 4GB --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --max-memory 4GB --keystore-kdf scrypt --kdf-params '{
   "n": 2097152,
   "r": 8,
   "p": 1,
@@ -291,7 +291,7 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Benchmark current configuration
-./bloco-eth benchmark-kdf --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen benchmark-kdf --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -304,7 +304,7 @@ Memory = 128 * n * r * p bytes
 **Option 1: Reduce security for faster generation**
 ```bash
 # Faster scrypt parameters
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 65536,
   "r": 8,
   "p": 1,
@@ -315,7 +315,7 @@ Memory = 128 * n * r * p bytes
 **Option 2: Switch to PBKDF2**
 ```bash
 # PBKDF2 is generally faster
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -325,7 +325,7 @@ Memory = 128 * n * r * p bytes
 **Option 3: Use development preset**
 ```bash
 # Fast development configuration
-./bloco-eth --prefix abc --preset development
+./bloco-vgen --prefix abc --preset development
 ```
 
 ### Problem: "High CPU usage during generation"
@@ -333,7 +333,7 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Monitor CPU usage during generation
-./bloco-eth --prefix abc --monitor-cpu --keystore-kdf scrypt
+./bloco-vgen --prefix abc --monitor-cpu --keystore-kdf scrypt
 ```
 
 #### Solutions
@@ -341,7 +341,7 @@ Memory = 128 * n * r * p bytes
 **Reduce parallelization parameter**
 ```bash
 # Reduce p parameter to lower CPU usage
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -352,7 +352,7 @@ Memory = 128 * n * r * p bytes
 **Use CPU-friendly PBKDF2**
 ```bash
 # PBKDF2 with moderate iteration count
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 200000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -366,7 +366,7 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Validate keystore structure
-./bloco-eth --validate-format ./keystores/0xabc123....json
+./bloco-vgen --validate-format ./keystores/0xabc123....json
 ```
 
 #### Common Format Issues
@@ -390,7 +390,7 @@ Memory = 128 * n * r * p bytes
 
 **Solution**: Regenerate with proper format validation
 ```bash
-./bloco-eth --prefix abc --validate-format --strict-compliance
+./bloco-vgen --prefix abc --validate-format --strict-compliance
 ```
 
 ### Problem: "MAC verification failed"
@@ -398,7 +398,7 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Test MAC verification
-./bloco-eth --verify-mac ./keystores/0xabc123....json --password password.txt
+./bloco-vgen --verify-mac ./keystores/0xabc123....json --password password.txt
 ```
 
 #### Solutions
@@ -406,13 +406,13 @@ Memory = 128 * n * r * p bytes
 **Regenerate keystore**
 ```bash
 # Generate new keystore with proper MAC
-./bloco-eth --prefix abc --force-regenerate
+./bloco-vgen --prefix abc --force-regenerate
 ```
 
 **Fix MAC calculation**
 ```bash
 # Repair MAC in existing keystore
-./bloco-eth --repair-mac ./keystores/0xabc123....json --password password.txt
+./bloco-vgen --repair-mac ./keystores/0xabc123....json --password password.txt
 ```
 
 ## Salt and Randomness Issues
@@ -422,13 +422,13 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Analyze salt strength
-./bloco-eth --analyze-salt ./keystores/0xabc123....json
+./bloco-vgen --analyze-salt ./keystores/0xabc123....json
 ```
 
 #### Solution
 ```bash
 # Generate with strong salt
-./bloco-eth --prefix abc --strong-salt --salt-length 32
+./bloco-vgen --prefix abc --strong-salt --salt-length 32
 ```
 
 ### Problem: "Duplicate salt values"
@@ -436,13 +436,13 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Check for salt collisions
-./bloco-eth --check-salt-uniqueness ./keystores/
+./bloco-vgen --check-salt-uniqueness ./keystores/
 ```
 
 #### Solution
 ```bash
 # Force unique salt generation
-./bloco-eth --prefix abc --unique-salt --entropy-source /dev/urandom
+./bloco-vgen --prefix abc --unique-salt --entropy-source /dev/urandom
 ```
 
 ## Cipher Issues
@@ -456,7 +456,7 @@ Memory = 128 * n * r * p bytes
 #### Solution
 ```bash
 # Use standard cipher
-./bloco-eth --prefix abc --cipher aes-128-ctr
+./bloco-vgen --prefix abc --cipher aes-128-ctr
 ```
 
 ### Problem: "Invalid IV length"
@@ -464,13 +464,13 @@ Memory = 128 * n * r * p bytes
 #### Diagnosis
 ```bash
 # Check cipher parameters
-./bloco-eth --analyze-cipher ./keystores/0xabc123....json
+./bloco-vgen --analyze-cipher ./keystores/0xabc123....json
 ```
 
 #### Solution
 ```bash
 # Generate with proper IV
-./bloco-eth --prefix abc --cipher aes-128-ctr --validate-iv
+./bloco-vgen --prefix abc --cipher aes-128-ctr --validate-iv
 ```
 
 ## Diagnostic Commands
@@ -478,7 +478,7 @@ Memory = 128 * n * r * p bytes
 ### Comprehensive Keystore Analysis
 ```bash
 # Full keystore analysis
-./bloco-eth --analyze-keystore ./keystores/0xabc123....json --verbose
+./bloco-vgen --analyze-keystore ./keystores/0xabc123....json --verbose
 ```
 
 **Output includes**:
@@ -491,7 +491,7 @@ Memory = 128 * n * r * p bytes
 ### Client Compatibility Matrix
 ```bash
 # Test compatibility with all clients
-./bloco-eth --compatibility-matrix ./keystores/0xabc123....json
+./bloco-vgen --compatibility-matrix ./keystores/0xabc123....json
 ```
 
 **Output format**:
@@ -511,7 +511,7 @@ Recommendations:
 ### Parameter Optimization
 ```bash
 # Get parameter optimization suggestions
-./bloco-eth --optimize-params --target-client geth --security-level high
+./bloco-vgen --optimize-params --target-client geth --security-level high
 ```
 
 **Output includes**:
@@ -525,19 +525,19 @@ Recommendations:
 ### Auto-Fix Common Issues
 ```bash
 # Automatically fix common compatibility issues
-./bloco-eth --auto-fix ./keystores/0xabc123....json --target-client geth
+./bloco-vgen --auto-fix ./keystores/0xabc123....json --target-client geth
 ```
 
 ### Batch Validation and Repair
 ```bash
 # Validate and repair all keystores in directory
-./bloco-eth --batch-validate ./keystores/ --auto-repair
+./bloco-vgen --batch-validate ./keystores/ --auto-repair
 ```
 
 ### Migration Between KDF Types
 ```bash
 # Migrate from scrypt to PBKDF2
-./bloco-eth --migrate-kdf ./keystores/0xabc123....json --from scrypt --to pbkdf2 --password password.txt
+./bloco-vgen --migrate-kdf ./keystores/0xabc123....json --from scrypt --to pbkdf2 --password password.txt
 ```
 
 ## Prevention Best Practices
@@ -545,7 +545,7 @@ Recommendations:
 ### Pre-Generation Validation
 ```bash
 # Validate parameters before generation
-./bloco-eth --validate-params --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --validate-params --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -556,16 +556,16 @@ Recommendations:
 ### Use Presets for Reliability
 ```bash
 # Use tested presets instead of custom parameters
-./bloco-eth --prefix abc --preset production-geth
-./bloco-eth --prefix abc --preset development-anvil
-./bloco-eth --prefix abc --preset enterprise-besu
+./bloco-vgen --prefix abc --preset production-geth
+./bloco-vgen --prefix abc --preset development-anvil
+./bloco-vgen --prefix abc --preset enterprise-besu
 ```
 
 ### Regular Compatibility Testing
 ```bash
 # Test keystores with actual clients regularly
-./bloco-eth --test-with-client geth ./keystores/0xabc123....json
-./bloco-eth --test-with-client besu ./keystores/0xabc123....json
+./bloco-vgen --test-with-client geth ./keystores/0xabc123....json
+./bloco-vgen --test-with-client besu ./keystores/0xabc123....json
 ```
 
 ## FAQ
@@ -573,13 +573,13 @@ Recommendations:
 ### Q: Why is my keystore not working with geth?
 **A**: Geth requires specific scrypt parameters. Use the geth preset:
 ```bash
-./bloco-eth --prefix abc --preset geth
+./bloco-vgen --prefix abc --preset geth
 ```
 
 ### Q: How do I make keystores compatible with all clients?
 **A**: Use standard parameters that all clients support:
 ```bash
-./bloco-eth --prefix abc --keystore-kdf scrypt --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf scrypt --kdf-params '{
   "n": 262144,
   "r": 8,
   "p": 1,
@@ -590,7 +590,7 @@ Recommendations:
 ### Q: What's the fastest KDF configuration that's still secure?
 **A**: Balanced PBKDF2 configuration:
 ```bash
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 300000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -600,7 +600,7 @@ Recommendations:
 ### Q: How do I reduce memory usage without compromising security?
 **A**: Switch to PBKDF2 with high iteration count:
 ```bash
-./bloco-eth --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
+./bloco-vgen --prefix abc --keystore-kdf pbkdf2 --kdf-params '{
   "c": 600000,
   "prf": "hmac-sha256",
   "dklen": 32
@@ -610,13 +610,13 @@ Recommendations:
 ### Q: Can I convert between KDF types?
 **A**: Yes, use the migration tool:
 ```bash
-./bloco-eth --migrate-kdf ./keystore.json --from scrypt --to pbkdf2 --password password.txt
+./bloco-vgen --migrate-kdf ./keystore.json --from scrypt --to pbkdf2 --password password.txt
 ```
 
 ### Q: How do I verify my keystore is secure?
 **A**: Use the security analysis tool:
 ```bash
-./bloco-eth --analyze-security ./keystore.json
+./bloco-vgen --analyze-security ./keystore.json
 ```
 
-This troubleshooting guide covers the most common issues you'll encounter when working with KDF configurations in bloco-eth. For additional support, use the built-in diagnostic tools and refer to the [KDF Configuration Examples](KDF_CONFIGURATION_EXAMPLES.md) document.
+This troubleshooting guide covers the most common issues you'll encounter when working with KDF configurations in bloco-vgen. For additional support, use the built-in diagnostic tools and refer to the [KDF Configuration Examples](KDF_CONFIGURATION_EXAMPLES.md) document.

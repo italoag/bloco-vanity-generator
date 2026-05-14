@@ -13,7 +13,7 @@ O módulo `internal/cli` possui múltiplos fluxos distintos: construção da apl
 flowchart TD
   A[NewApplication] --> B[preenche Application]
   B --> C[setupCommands]
-  C --> D[cria rootCmd bloco-eth]
+  C --> D[cria rootCmd bloco-vgen]
   D --> E[addGlobalFlags]
   E --> F[createStatsCommand]
   F --> G[createBenchmarkCommand]
@@ -25,7 +25,7 @@ flowchart TD
 |---|---|---|---:|
 | 1 | O construtor recebe `Config`, `version`, `gitCommit` e `buildTime`. | `internal/cli/commands.go:37-44` | 🟢 |
 | 2 | O construtor chama `setupCommands()`. | `internal/cli/commands.go:46` | 🟢 |
-| 3 | `setupCommands()` cria o comando raiz `bloco-eth` com `RunE: app.generateWallet`. | `internal/cli/commands.go:55-66` | 🟢 |
+| 3 | `setupCommands()` cria o comando raiz `bloco-vgen` com `RunE: app.generateWallet`. | `internal/cli/commands.go:55-66` | 🟢 |
 | 4 | Flags globais são adicionadas ao comando raiz. | `internal/cli/commands.go:68-69` | 🟢 |
 | 5 | Subcomandos `stats`, `benchmark` e `version` são adicionados. | `internal/cli/commands.go:71-74` | 🟢 |
 

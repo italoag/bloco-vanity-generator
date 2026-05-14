@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"bloco-eth/internal/config"
+	"bloco-vgen/internal/config"
 )
 
 func TestParseLoggingFlags(t *testing.T) {

@@ -5,24 +5,24 @@
 
 ## Visão Geral
 
-Este arquivo documenta os contratos operacionais expostos pela CLI `bloco-eth`: comandos, flags, entradas, saídas, exit behavior, artefatos gerados e contratos internos que a camada CLI espera dos módulos dependentes. O sistema não expõe endpoints HTTP/RPC. 🟢
+Este arquivo documenta os contratos operacionais expostos pela CLI `bloco-vgen`: comandos, flags, entradas, saídas, exit behavior, artefatos gerados e contratos internos que a camada CLI espera dos módulos dependentes. O sistema não expõe endpoints HTTP/RPC. 🟢
 
 ## Contrato de Processo
 
 | Item | Contrato | Evidência | Confiança |
 |---|---|---|---:|
-| Binário | O comando raiz é `bloco-eth`. | `internal/cli/commands.go:57-66` | 🟢 |
+| Binário | O comando raiz é `bloco-vgen`. | `internal/cli/commands.go:57-66` | 🟢 |
 | Execução padrão | Sem subcomando, o root command executa geração de carteira via `RunE: app.generateWallet`. | `internal/cli/commands.go:57-66` | 🟢 |
 | Versão | O comando raiz expõe versão no formato `<version> (commit: <gitCommit>, built: <buildTime>)`. | `internal/cli/commands.go:64` | 🟢 |
-| Contexto | Execução aceita `context.Context` por Cobra/Fang. | `internal/cli/commands.go:50-52`; `cmd/bloco-eth/main.go:42-47` | 🟢 |
-| Erros | Handlers retornam `error`; entrypoint trata e encerra com código `1`. | `cmd/bloco-eth/main.go:47-50` | 🟢 |
+| Contexto | Execução aceita `context.Context` por Cobra/Fang. | `internal/cli/commands.go:50-52`; `cmd/bloco-vgen/main.go:42-47` | 🟢 |
+| Erros | Handlers retornam `error`; entrypoint trata e encerra com código `1`. | `cmd/bloco-vgen/main.go:47-50` | 🟢 |
 
 ## Contrato do Comando Raiz: geração de carteiras
 
 ### Comando
 
 ```text
-bloco-eth [flags]
+bloco-vgen [flags]
 ```
 
 ### Flags de geração
@@ -80,7 +80,7 @@ bloco-eth [flags]
 ## Contrato do Subcomando `stats`
 
 ```text
-bloco-eth stats [--prefix <hex>] [--suffix <hex>] [--checksum] [--tui]
+bloco-vgen stats [--prefix <hex>] [--suffix <hex>] [--checksum] [--tui]
 ```
 
 | Item | Contrato | Evidência | Confiança |
@@ -95,7 +95,7 @@ bloco-eth stats [--prefix <hex>] [--suffix <hex>] [--checksum] [--tui]
 ## Contrato do Subcomando `benchmark`
 
 ```text
-bloco-eth benchmark [--attempts <n>] [--duration <duration>] [--detailed] [--tui]
+bloco-vgen benchmark [--attempts <n>] [--duration <duration>] [--detailed] [--tui]
 ```
 
 | Item | Contrato | Evidência | Confiança |
@@ -111,7 +111,7 @@ bloco-eth benchmark [--attempts <n>] [--duration <duration>] [--detailed] [--tui
 ## Contrato do Subcomando `version`
 
 ```text
-bloco-eth version
+bloco-vgen version
 ```
 
 | Saída | Evidência | Confiança |

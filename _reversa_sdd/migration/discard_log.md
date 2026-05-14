@@ -14,10 +14,10 @@ hash: "sha256:7b1552106139f59ee17af5b05176997a83f48c813a28049143e4c6f316563f03"
 
 ## Itens descartados
 
-### BR-DESCARTAR-001 — Nome legado `bloco-eth` como canônico
+### BR-DESCARTAR-001 — Nome legado `bloco-vgen` como canônico
 
 - **Origem**: `_reversa_sdd/questions.md` Pergunta 1; `_reversa_sdd/gaps.md` GAP-RV-001
-- **Descrição**: Preservar `bloco-eth` como nome canônico do produto/binário/documentação.
+- **Descrição**: Preservar `bloco-vgen` como nome canônico do produto/binário/documentação.
 - **Justificativa**: Decisão humana consolidou `bloco-vanity-generator` para produto/repositório/documentação e `bloco-vgen` como binário compatível.
 - **Vinculado a paradigma**: não
 - **Reposição no sistema novo**: nome canônico `bloco-vanity-generator`; compatibilidade operacional via `bloco-vgen`.

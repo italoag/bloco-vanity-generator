@@ -35,7 +35,7 @@
           "Go Ethereum"
         ],
         "modules": [
-          "cmd/bloco-eth",
+          "cmd/bloco-vgen",
           "internal/cli",
           "internal/config",
           "internal/crypto",
@@ -57,7 +57,7 @@
         "_reversa_sdd/code-analysis.md",
         "_reversa_sdd/data-dictionary.md",
         ".reversa/context/modules.json",
-        "_reversa_sdd/flowcharts/cmd-bloco-eth.md",
+        "_reversa_sdd/flowcharts/cmd-bloco-vgen.md",
         "_reversa_sdd/flowcharts/internal-cli.md",
         "_reversa_sdd/flowcharts/internal-config.md",
         "_reversa_sdd/flowcharts/internal-crypto.md",
@@ -73,7 +73,7 @@
       ],
       "summary": {
         "modules_analyzed": [
-          "cmd/bloco-eth",
+          "cmd/bloco-vgen",
           "internal/cli",
           "internal/config",
           "internal/crypto",
@@ -122,7 +122,7 @@
         "state_machines_count": 7,
         "permissions_model": "local CLI + GitHub Actions; no application RBAC",
         "key_gaps": [
-          "Nomes de produto/módulo/binário ainda misturam bloco-eth, bloco-wallet-generator e bloco-vanity-generator.",
+          "Nomes de produto/módulo/binário ainda misturam bloco-vgen, bloco-wallet-generator e bloco-vanity-generator.",
           "README pode anunciar flags não confirmadas no CLI, como --optimize-for e benchmark --pattern.",
           "Keystore e Solana ainda têm placeholders/simplificações documentadas.",
           "Logs legados wallets-*.log podem conter termos de private key e foram analisados apenas por metadados."
@@ -165,7 +165,7 @@
           "Trivy"
         ],
         "technical_debt": [
-          "Naming inconsistente entre bloco-eth, bloco-wallet-generator e bloco-vanity-generator.",
+          "Naming inconsistente entre bloco-vgen, bloco-wallet-generator e bloco-vanity-generator.",
           "Modelo Wallet/IsValid centrado em Ethereum apesar do suporte multi-rede.",
           "Placeholders/simplificações em keystore e persistência Solana.",
           "Progress manager texto desabilitado por deadlocks.",
@@ -177,12 +177,12 @@
     "writer": {
       "completed_at": "2026-05-08T02:11:57Z",
       "files": [
-        "_reversa_sdd/cmd/bloco-eth/requirements.md",
-        "_reversa_sdd/cmd/bloco-eth/design.md",
-        "_reversa_sdd/cmd/bloco-eth/tasks.md",
-        "_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/requirements.md",
-        "_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/design.md",
-        "_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/tasks.md",
+        "_reversa_sdd/cmd/bloco-vgen/requirements.md",
+        "_reversa_sdd/cmd/bloco-vgen/design.md",
+        "_reversa_sdd/cmd/bloco-vgen/tasks.md",
+        "_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/requirements.md",
+        "_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/design.md",
+        "_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/tasks.md",
         "_reversa_sdd/internal/cli/requirements.md",
         "_reversa_sdd/internal/cli/design.md",
         "_reversa_sdd/internal/cli/tasks.md",
@@ -447,12 +447,12 @@
     "last_completed": "_reversa_sdd/traceability/code-spec-matrix.md",
     "next_file": null,
     "completed_files": [
-      "_reversa_sdd/cmd/bloco-eth/requirements.md",
-      "_reversa_sdd/cmd/bloco-eth/design.md",
-      "_reversa_sdd/cmd/bloco-eth/tasks.md",
-      "_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/requirements.md",
-      "_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/design.md",
-      "_reversa_sdd/cmd/bloco-eth/inicializacao-da-cli/tasks.md",
+      "_reversa_sdd/cmd/bloco-vgen/requirements.md",
+      "_reversa_sdd/cmd/bloco-vgen/design.md",
+      "_reversa_sdd/cmd/bloco-vgen/tasks.md",
+      "_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/requirements.md",
+      "_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/design.md",
+      "_reversa_sdd/cmd/bloco-vgen/inicializacao-da-cli/tasks.md",
       "_reversa_sdd/internal/cli/requirements.md",
       "_reversa_sdd/internal/cli/design.md",
       "_reversa_sdd/internal/cli/tasks.md",
@@ -559,8 +559,8 @@
       "_reversa_sdd/traceability/code-spec-matrix.md"
     ],
     "completed_units": [
-      "cmd/bloco-eth",
-      "cmd/bloco-eth/inicializacao-da-cli",
+      "cmd/bloco-vgen",
+      "cmd/bloco-vgen/inicializacao-da-cli",
       "internal/cli",
       "internal/cli/gerar-carteiras-vanity",
       "internal/cli/salvar-keystore",

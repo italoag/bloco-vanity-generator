@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/wallet"
 	"context"
 )
 

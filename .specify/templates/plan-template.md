@@ -75,7 +75,7 @@ specs/[###-feature]/
 -->
 ```
 cmd/
-├── bloco-eth/
+├── bloco-vgen/
 │   └── main.go
 
 internal/

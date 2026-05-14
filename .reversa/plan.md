@@ -20,7 +20,7 @@
 
 > Preenchido pelo Reversa após o Scout concluir o reconhecimento.
 
-- [x] ✅ **Archaeologist** — Análise do módulo `cmd/bloco-eth`
+- [x] ✅ **Archaeologist** — Análise do módulo `cmd/bloco-vgen`
 - [x] ✅ **Archaeologist** — Análise do módulo `internal/cli`
 - [x] ✅ **Archaeologist** — Análise do módulo `internal/config`
 - [x] ✅ **Archaeologist** — Análise do módulo `internal/crypto`

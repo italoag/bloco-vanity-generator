@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	"bloco-eth/pkg/wallet"
+	"bloco-vgen/pkg/wallet"
 )
 
 // TUIManager handles TUI capability detection and management
