@@ -873,6 +873,13 @@ func (app *Application) showStatsText(criteria wallet.GenerationCriteria, diffic
 	fmt.Printf("Difficulty: %s\n", formatLargeNumber(int64(difficulty)))
 	fmt.Printf("50%% Probability: %s attempts\n", formatLargeNumber(probability50))
 
+	fmt.Printf("\nDetailed Statistics:\n")
+	fmt.Printf("%-22s %-30s %s\n", "Metric", "Value", "Description")
+	fmt.Printf("%s\n", strings.Repeat("─", 95))
+	for _, row := range buildStatsTextRows(criteria, difficulty, probability50) {
+		fmt.Printf("%-22s %-30s %s\n", row.metric, row.value, row.description)
+	}
+
 	// Show time estimates at different speeds
 	fmt.Printf("\nTime Estimates:\n")
 	speeds := []float64{1000, 10000, 50000, 100000}
@@ -886,6 +893,83 @@ func (app *Application) showStatsText(criteria wallet.GenerationCriteria, diffic
 	}
 
 	return nil
+}
+
+type statsTextRow struct {
+	metric      string
+	value       string
+	description string
+}
+
+func buildStatsTextRows(criteria wallet.GenerationCriteria, difficulty float64, probability50 int64) []statsTextRow {
+	pattern := criteria.GetPattern()
+	if pattern == "" {
+		pattern = "any"
+	}
+	baseDifficulty := utils.CalculateDifficulty(criteria.Prefix, criteria.Suffix, false)
+	rows := []statsTextRow{
+		{
+			metric:      "Pattern",
+			value:       pattern,
+			description: "The address pattern to match",
+		},
+		{
+			metric:      "Pattern Length",
+			value:       fmt.Sprintf("%d characters", criteria.GetPatternLength()),
+			description: "Number of hex characters to match",
+		},
+		{
+			metric:      "Base Difficulty",
+			value:       formatLargeNumber(int64(baseDifficulty)),
+			description: "Difficulty without checksum validation",
+		},
+		{
+			metric:      "Total Difficulty",
+			value:       formatLargeNumber(int64(difficulty)),
+			description: "Final difficulty including checksum",
+		},
+	}
+	if criteria.IsChecksum && baseDifficulty > 0 {
+		rows = append(rows, statsTextRow{
+			metric:      "Checksum Multiplier",
+			value:       fmt.Sprintf("%.1fx", difficulty/baseDifficulty),
+			description: "Difficulty increase from checksum",
+		})
+	}
+	if probability50 > 0 {
+		rows = append(rows, statsTextRow{
+			metric:      "50% Probability",
+			value:       formatLargeNumber(probability50),
+			description: "Attempts needed for 50% success chance",
+		})
+	} else {
+		rows = append(rows, statsTextRow{
+			metric:      "50% Probability",
+			value:       "Nearly impossible",
+			description: "Pattern is extremely difficult",
+		})
+	}
+	rows = append(rows, statsTextRow{
+		metric:      "Expected Attempts",
+		value:       formatLargeNumber(int64(difficulty)),
+		description: "Mathematical expectation (average)",
+	})
+	probPerAttempt := 0.0
+	if difficulty > 0 {
+		probPerAttempt = 1.0 / difficulty * 100
+	}
+	probPerAttemptStr := "0%"
+	if probPerAttempt > 0 && probPerAttempt < 0.000001 {
+		probPerAttemptStr = fmt.Sprintf("%.2e%%", probPerAttempt)
+	} else if probPerAttempt > 0 {
+		probPerAttemptStr = fmt.Sprintf("%.6f%%", probPerAttempt)
+	}
+	rows = append(rows, statsTextRow{
+		metric:      "Success Rate",
+		value:       probPerAttemptStr,
+		description: "Probability of success per attempt",
+	})
+	return rows
 }
 
 // createBenchmarkCommand creates the benchmark subcommand

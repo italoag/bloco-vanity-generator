@@ -55,6 +55,39 @@ func TestGetGenerationCriteriaRejectsCaseSensitiveWithoutChecksum(t *testing.T) 
 	}
 }
 
+func TestBuildStatsTextRowsIncludesDetailedStatistics(t *testing.T) {
+	criteria := wallet.GenerationCriteria{
+		Prefix:        "BAD",
+		Suffix:        "DAD",
+		IsChecksum:    true,
+		CaseSensitive: true,
+	}
+	difficulty := calculateDifficulty(criteria)
+	probability50 := calculateProbability50(difficulty)
+
+	rows := buildStatsTextRows(criteria, difficulty, probability50)
+	values := make(map[string]string, len(rows))
+	for _, row := range rows {
+		values[row.metric] = row.value
+	}
+
+	wantValues := map[string]string{
+		"Pattern":             "BADDAD",
+		"Pattern Length":      "6 characters",
+		"Base Difficulty":     formatLargeNumber(16777216),
+		"Total Difficulty":    formatLargeNumber(1073741824),
+		"Checksum Multiplier": "64.0x",
+		"50% Probability":     formatLargeNumber(744261117),
+		"Expected Attempts":   formatLargeNumber(1073741824),
+		"Success Rate":        "9.31e-08%",
+	}
+	for metric, want := range wantValues {
+		if got := values[metric]; got != want {
+			t.Fatalf("metric %q = %q, want %q; rows=%v", metric, got, want, values)
+		}
+	}
+}
+
 func TestGetGenerationEngineOptionsReadsEnvironment(t *testing.T) {
 	t.Setenv(envBlocoEngine, engine.NameCPU)
 	t.Setenv(envBlocoGPUBatchSize, "7")

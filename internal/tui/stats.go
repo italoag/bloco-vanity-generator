@@ -84,7 +84,7 @@ func NewStatsModel(stats *wallet.GenerationStats) StatsModel {
 
 	t.SetStyles(tableStyle)
 
-	return StatsModel{
+	model := StatsModel{
 		table:        t,
 		stats:        stats,
 		styleManager: styleManager,
@@ -93,11 +93,13 @@ func NewStatsModel(stats *wallet.GenerationStats) StatsModel {
 		quitting:     false,
 		ready:        false,
 	}
+	model.updateTableData()
+	return model
 }
 
 // Init initializes the statistics model
 func (m StatsModel) Init() tea.Cmd {
-	return m.updateTableData()
+	return nil
 }
 
 // Update handles messages and updates the model
@@ -132,13 +134,15 @@ func (m StatsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle external statistics updates
 		if msg.Stats != nil {
 			m.stats = msg.Stats
-			return m, m.updateTableData()
+			m.updateTableData()
+			return m, nil
 		}
 
 	default:
 		if !m.ready {
 			m.ready = true
-			return m, m.updateTableData()
+			m.updateTableData()
+			return m, nil
 		}
 	}
 
@@ -424,16 +428,14 @@ func (m StatsModel) renderRecommendations() string {
 }
 
 // updateTableData updates the table with current statistics
-func (m StatsModel) updateTableData() tea.Cmd {
+func (m *StatsModel) updateTableData() {
 	if m.stats == nil {
-		return nil
+		return
 	}
 
 	// Generate table rows with statistical data
 	rows := m.generateStatisticsRows()
 	m.table.SetRows(rows)
-
-	return nil
 }
 
 // generateStatisticsRows generates the main statistics table rows
