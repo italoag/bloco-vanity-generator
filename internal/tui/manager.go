@@ -309,6 +309,10 @@ func (tm *TUIManager) CreateStatsModel(stats *wallet.GenerationStats) tea.Model 
 	return NewStatsModel(stats)
 }
 
+func (tm *TUIManager) CreateStatsModelWithEngine(stats *wallet.GenerationStats, engineInfo EngineInfo) tea.Model {
+	return NewStatsModel(stats).WithEngineInfo(engineInfo)
+}
+
 // GetCapabilities returns the current terminal capabilities
 func (tm *TUIManager) GetCapabilities() TUICapabilities {
 	return tm.DetectCapabilities()

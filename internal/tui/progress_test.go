@@ -1,10 +1,9 @@
 package tui
 
 import (
+	"bloco-vgen/pkg/wallet"
 	"strings"
 	"testing"
-
-	"bloco-vgen/pkg/wallet"
 )
 
 func TestEngineInfoIsZero(t *testing.T) {

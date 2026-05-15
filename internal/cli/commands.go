@@ -807,11 +807,22 @@ func (app *Application) createStatsCommand() *cobra.Command {
 
 // showStats displays statistics for a pattern
 func (app *Application) showStats(cmd *cobra.Command, args []string) error {
+	if err := app.parseFlags(cmd); err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"parse_flags", "failed to parse command flags")
+	}
+
 	criteria, err := app.getGenerationCriteria(cmd)
 	if err != nil {
 		return errors.WrapError(err, errors.ErrorTypeValidation,
 			"show_stats", "invalid pattern criteria")
 	}
+	engineSelection, generationOptions, err := app.getGenerationEngineOptions(cmd, criteria)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"resolve_engine", "failed to resolve generation engine")
+	}
+	engineInfo := newTUIEngineInfo(engineSelection, generationOptions, app.config.Worker.ThreadCount)
 
 	// Calculate statistics
 	difficulty := calculateDifficulty(criteria)
@@ -822,7 +833,7 @@ func (app *Application) showStats(cmd *cobra.Command, args []string) error {
 	useTUI, _ := cmd.Flags().GetBool("tui")
 
 	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.showStatsTUI(criteria, difficulty, probability50)
+		return app.showStatsTUI(criteria, difficulty, probability50, engineInfo)
 	}
 
 	// Fallback to text mode
@@ -830,7 +841,7 @@ func (app *Application) showStats(cmd *cobra.Command, args []string) error {
 }
 
 // showStatsTUI displays statistics using TUI interface
-func (app *Application) showStatsTUI(criteria wallet.GenerationCriteria, difficulty float64, probability50 int64) error {
+func (app *Application) showStatsTUI(criteria wallet.GenerationCriteria, difficulty float64, probability50 int64, engineInfo tui.EngineInfo) error {
 	// Create TUI statistics interface
 	tuiStats := &wallet.GenerationStats{
 		Difficulty:      difficulty,
@@ -847,7 +858,7 @@ func (app *Application) showStatsTUI(criteria wallet.GenerationCriteria, difficu
 
 	// Create TUI stats model
 	tuiManager := tui.NewTUIManager()
-	statsModel := tuiManager.CreateStatsModel(tuiStats)
+	statsModel := tuiManager.CreateStatsModelWithEngine(tuiStats, engineInfo)
 
 	// Create TUI program
 	program := tea.NewProgram(statsModel, tea.WithAltScreen())
