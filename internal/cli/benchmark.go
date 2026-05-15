@@ -44,6 +44,7 @@ type benchmarkOptions struct {
 	ComparePatterns []string
 	CompareBatches  []int
 	CompareChecksum []bool
+	CompareCriteria bool
 	Engine          string
 	RequestedEngine string
 	FallbackReason  string
@@ -67,6 +68,8 @@ type benchmarkSample struct {
 type benchmarkComparisonResult struct {
 	Phase                 string                    `json:"phase"`
 	RequestedEngine       string                    `json:"requested_engine,omitempty"`
+	BestApproach          string                    `json:"best_approach"`
+	BestApproachReason    string                    `json:"best_approach_reason"`
 	DefaultEngineDecision string                    `json:"default_engine_decision"`
 	DecisionReason        string                    `json:"decision_reason"`
 	SpeedupThreshold      float64                   `json:"speedup_threshold"`
@@ -84,10 +87,16 @@ type benchmarkComparisonCase struct {
 	BatchSize                   int                     `json:"batch_size"`
 	CPU                         *wallet.BenchmarkResult `json:"cpu,omitempty"`
 	Metal                       *wallet.BenchmarkResult `json:"metal,omitempty"`
+	Auto                        *wallet.BenchmarkResult `json:"auto,omitempty"`
+	AutoResolvedEngine          string                  `json:"auto_resolved_engine,omitempty"`
 	SpeedupVsCPU                float64                 `json:"speedup_vs_cpu,omitempty"`
+	AutoSpeedupVsCPU            float64                 `json:"auto_speedup_vs_cpu,omitempty"`
+	MetalSpeedupVsAuto          float64                 `json:"metal_speedup_vs_auto,omitempty"`
 	MetalStable                 bool                    `json:"metal_stable"`
 	MetalCoefficientOfVariation float64                 `json:"metal_coefficient_of_variation,omitempty"`
 	Decision                    string                  `json:"decision"`
+	MetalError                  string                  `json:"metal_error,omitempty"`
+	AutoError                   string                  `json:"auto_error,omitempty"`
 	Error                       string                  `json:"error,omitempty"`
 }
 
@@ -133,6 +142,17 @@ func (app *Application) getBenchmarkOptions(cmd *cobra.Command) (benchmarkOption
 	compareChecksums, err := parseBenchmarkBoolList(flagString(cmd, "compare-checksums"))
 	if err != nil {
 		return benchmarkOptions{}, err
+	}
+	compareCriteria := compare && criteria.GetPattern() != "" && !cmd.Flags().Changed("compare-patterns") && !cmd.Flags().Changed("compare-checksums")
+	if compare && cmd.Flags().Changed("batch-size") && !cmd.Flags().Changed("compare-batch-sizes") {
+		compareBatches = []int{batchSize}
+	}
+	if compareCriteria {
+		comparePatterns = []string{criteria.GetPattern()}
+		compareChecksums = []bool{criteria.IsChecksum}
+		if !cmd.Flags().Changed("compare-batch-sizes") {
+			compareBatches = []int{batchSize}
+		}
 	}
 
 	if attempts <= 0 {
@@ -187,6 +207,7 @@ func (app *Application) getBenchmarkOptions(cmd *cobra.Command) (benchmarkOption
 		ComparePatterns: comparePatterns,
 		CompareBatches:  compareBatches,
 		CompareChecksum: compareChecksums,
+		CompareCriteria: compareCriteria,
 		Engine:          selection.Resolved,
 		RequestedEngine: selection.Requested,
 		FallbackReason:  selection.FallbackReason,
@@ -242,9 +263,15 @@ func (app *Application) runBenchmarkEngine(ctx context.Context, options benchmar
 }
 
 func (app *Application) runBenchmarkComparison(ctx context.Context, options benchmarkOptions) (*benchmarkComparisonResult, error) {
-	comparison := &benchmarkComparisonResult{
+	return app.runBenchmarkComparisonWithUpdates(ctx, options, nil)
+}
+
+func newBenchmarkComparisonResult(options benchmarkOptions) *benchmarkComparisonResult {
+	return &benchmarkComparisonResult{
 		Phase:                 "6",
 		RequestedEngine:       options.RequestedEngine,
+		BestApproach:          engine.NameCPU,
+		BestApproachReason:    "cpu is the safest baseline until comparison data is available",
 		DefaultEngineDecision: engine.NameCPU,
 		DecisionReason:        "metal remains experimental until every local comparison case shows stable speedup >= 1.5x",
 		SpeedupThreshold:      phase6SpeedupThreshold,
@@ -254,32 +281,50 @@ func (app *Application) runBenchmarkComparison(ctx context.Context, options benc
 		Platform:              runtime.GOOS + "/" + runtime.GOARCH,
 		PowerMode:             detectPowerMode(),
 	}
+}
+
+func (app *Application) runBenchmarkComparisonWithUpdates(ctx context.Context, options benchmarkOptions, onCase func(*benchmarkComparisonResult)) (*benchmarkComparisonResult, error) {
+	comparison := newBenchmarkComparisonResult(options)
 
 	for _, pattern := range options.ComparePatterns {
 		for _, checksum := range options.CompareChecksum {
 			for _, batchSize := range options.CompareBatches {
 				comparison.Cases = append(comparison.Cases, app.runBenchmarkComparisonCase(ctx, options, pattern, checksum, batchSize))
+				comparison.BestApproach, comparison.BestApproachReason = decideBenchmarkBestApproach(comparison.Cases)
+				comparison.DefaultEngineDecision, comparison.DecisionReason = decideBenchmarkDefault(comparison.Cases)
+				if onCase != nil {
+					onCase(comparison)
+				}
 			}
 		}
 	}
 
 	comparison.DefaultEngineDecision, comparison.DecisionReason = decideBenchmarkDefault(comparison.Cases)
+	comparison.BestApproach, comparison.BestApproachReason = decideBenchmarkBestApproach(comparison.Cases)
+	if onCase != nil {
+		onCase(comparison)
+	}
 	return comparison, nil
 }
 
 func (app *Application) runBenchmarkComparisonCase(ctx context.Context, options benchmarkOptions, pattern string, checksum bool, batchSize int) benchmarkComparisonCase {
+	criteria := options.Criteria
+	if options.CompareCriteria {
+		pattern = criteria.GetPattern()
+		checksum = criteria.IsChecksum
+	} else {
+		criteria.Prefix = pattern
+		criteria.Suffix = ""
+		criteria.IsChecksum = checksum
+		if !checksum {
+			criteria.CaseSensitive = false
+		}
+	}
 	resultCase := benchmarkComparisonCase{
 		Pattern:   pattern,
 		Checksum:  checksum,
 		BatchSize: batchSize,
 		Decision:  engine.NameCPU,
-	}
-	criteria := options.Criteria
-	criteria.Prefix = pattern
-	criteria.Suffix = ""
-	criteria.IsChecksum = checksum
-	if !checksum {
-		criteria.CaseSensitive = false
 	}
 	if err := criteria.Validate(); err != nil {
 		resultCase.Error = err.Error()
@@ -300,6 +345,30 @@ func (app *Application) runBenchmarkComparisonCase(ctx context.Context, options 
 	}
 	resultCase.CPU = cpuResult
 
+	autoOptions := options
+	autoOptions.Engine = engine.NameAuto
+	autoOptions.RequestedEngine = engine.NameAuto
+	autoOptions.FallbackReason = ""
+	autoOptions.BatchSize = batchSize
+	autoOptions.Criteria = criteria
+	autoSelection, err := engine.Resolve(engine.NameAuto)
+	if err != nil {
+		resultCase.AutoError = err.Error()
+	} else {
+		autoOptions.Engine = autoSelection.Resolved
+		autoOptions.FallbackReason = autoSelection.FallbackReason
+		autoResult, err := app.runBenchmarkEngine(ctx, autoOptions, sampleInterval, nil)
+		if err != nil {
+			resultCase.AutoError = err.Error()
+		} else {
+			resultCase.Auto = autoResult
+			resultCase.AutoResolvedEngine = autoResult.Engine
+			if cpuResult.AverageSpeed > 0 {
+				resultCase.AutoSpeedupVsCPU = autoResult.AverageSpeed / cpuResult.AverageSpeed
+			}
+		}
+	}
+
 	metalOptions := options
 	metalOptions.Engine = engine.NameMetal
 	metalOptions.RequestedEngine = engine.NameMetal
@@ -308,19 +377,41 @@ func (app *Application) runBenchmarkComparisonCase(ctx context.Context, options 
 	metalOptions.Criteria = criteria
 	metalResult, err := app.runBenchmarkEngine(ctx, metalOptions, sampleInterval, nil)
 	if err != nil {
-		resultCase.Error = err.Error()
+		resultCase.MetalError = err.Error()
+		resultCase.Decision = decideBenchmarkCaseBest(resultCase)
 		return resultCase
 	}
 	resultCase.Metal = metalResult
 	if cpuResult.AverageSpeed > 0 {
 		resultCase.SpeedupVsCPU = metalResult.AverageSpeed / cpuResult.AverageSpeed
 	}
+	if resultCase.Auto != nil && resultCase.Auto.AverageSpeed > 0 {
+		resultCase.MetalSpeedupVsAuto = metalResult.AverageSpeed / resultCase.Auto.AverageSpeed
+	}
 	resultCase.MetalCoefficientOfVariation = benchmarkCoefficientOfVariation(metalResult.SpeedSamples)
 	resultCase.MetalStable = len(metalResult.SpeedSamples) > 1 && resultCase.MetalCoefficientOfVariation <= phase6StabilityCVThreshold
 	if resultCase.SpeedupVsCPU >= phase6SpeedupThreshold && resultCase.MetalStable {
 		resultCase.Decision = engine.NameMetal
+	} else {
+		resultCase.Decision = decideBenchmarkCaseBest(resultCase)
 	}
 	return resultCase
+}
+
+func decideBenchmarkCaseBest(resultCase benchmarkComparisonCase) string {
+	best := engine.NameCPU
+	bestSpeed := 0.0
+	if resultCase.CPU != nil {
+		bestSpeed = resultCase.CPU.AverageSpeed
+	}
+	if resultCase.Auto != nil && resultCase.Auto.AverageSpeed > bestSpeed {
+		best = engine.NameAuto
+		bestSpeed = resultCase.Auto.AverageSpeed
+	}
+	if resultCase.Metal != nil && resultCase.MetalStable && resultCase.Metal.AverageSpeed > bestSpeed {
+		best = engine.NameMetal
+	}
+	return best
 }
 
 func resolveCommandEngine(cmd *cobra.Command) (engine.Selection, error) {
@@ -508,7 +599,7 @@ func resolveMetalValidationConfig(cmd *cobra.Command, resolvedEngine string, mod
 		return "", fmt.Errorf("%s must be true or false, got %q", envBlocoGPUVerifyCPU, envValue)
 	}
 	if !verifyCPU && resolvedEngine == engine.NameMetal {
-		return "", fmt.Errorf("%s=false is unsupported for metal benchmarks (Phase 4 requires full CPU verification)", envBlocoGPUVerifyCPU)
+		return "", fmt.Errorf("%s=false is unsupported for metal benchmarks (requires full CPU verification)", envBlocoGPUVerifyCPU)
 	}
 	return engine.MetalValidationFull, nil
 }
@@ -621,6 +712,60 @@ func decideBenchmarkDefault(cases []benchmarkComparisonCase) (string, string) {
 	return engine.NameMetal, "metal can become default on this Apple Silicon profile because every local case showed stable speedup >= 1.5x"
 }
 
+func decideBenchmarkBestApproach(cases []benchmarkComparisonCase) (string, string) {
+	if len(cases) == 0 {
+		return engine.NameCPU, "cpu is the safest baseline until comparison data is available"
+	}
+
+	type aggregate struct {
+		total float64
+		count int
+	}
+	aggregates := map[string]aggregate{
+		engine.NameCPU:   {},
+		engine.NameAuto:  {},
+		engine.NameMetal: {},
+	}
+	for _, resultCase := range cases {
+		if resultCase.CPU != nil {
+			a := aggregates[engine.NameCPU]
+			a.total += resultCase.CPU.AverageSpeed
+			a.count++
+			aggregates[engine.NameCPU] = a
+		}
+		if resultCase.Auto != nil {
+			a := aggregates[engine.NameAuto]
+			a.total += resultCase.Auto.AverageSpeed
+			a.count++
+			aggregates[engine.NameAuto] = a
+		}
+		if resultCase.Metal != nil && resultCase.MetalStable {
+			a := aggregates[engine.NameMetal]
+			a.total += resultCase.Metal.AverageSpeed
+			a.count++
+			aggregates[engine.NameMetal] = a
+		}
+	}
+
+	best := engine.NameCPU
+	bestAverage := 0.0
+	for _, name := range []string{engine.NameCPU, engine.NameAuto, engine.NameMetal} {
+		a := aggregates[name]
+		if a.count != len(cases) || a.count == 0 {
+			continue
+		}
+		average := a.total / float64(a.count)
+		if average > bestAverage {
+			best = name
+			bestAverage = average
+		}
+	}
+	if bestAverage == 0 {
+		return engine.NameCPU, "cpu remains best approach because no engine completed every comparison case"
+	}
+	return best, fmt.Sprintf("%s has the highest average stable throughput across %d completed comparison case(s)", best, len(cases))
+}
+
 func detectPowerMode() string {
 	if runtime.GOOS != "darwin" {
 		return ""
@@ -661,7 +806,7 @@ func benchmarkSampleStats(samples []float64) (float64, float64) {
 
 func (app *Application) runBenchmarkComparisonText(ctx context.Context, options benchmarkOptions) error {
 	if options.Format == benchmarkFormatText {
-		fmt.Printf("Running Phase 6 CPU vs Metal comparison...\n")
+		fmt.Printf("Running CPU vs Auto vs Metal comparison...\n")
 		fmt.Printf("Patterns: %s\n", strings.Join(options.ComparePatterns, ", "))
 		fmt.Printf("Batch Sizes: %s\n", formatIntList(options.CompareBatches))
 		fmt.Printf("Checksum Modes: %s\n\n", formatBoolList(options.CompareChecksum))
@@ -672,6 +817,146 @@ func (app *Application) runBenchmarkComparisonText(ctx context.Context, options 
 		return err
 	}
 	return app.writeBenchmarkComparisonOutput(comparison, options)
+}
+
+func (app *Application) runBenchmarkComparisonTUI(ctx context.Context, options benchmarkOptions) error {
+	type benchmarkComparisonTUIOutcome struct {
+		result *benchmarkComparisonResult
+		err    error
+	}
+
+	total := benchmarkComparisonTotal(options)
+	initial := newBenchmarkComparisonResult(options)
+	tuiManager := tui.NewTUIManager()
+	model := tuiManager.CreateBenchmarkComparisonModel(benchmarkComparisonTUISummary(initial), total)
+	program := tea.NewProgram(model, tea.WithAltScreen())
+
+	benchmarkCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	outcomeCh := make(chan benchmarkComparisonTUIOutcome, 1)
+
+	go func() {
+		timer := time.NewTimer(200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-benchmarkCtx.Done():
+			outcomeCh <- benchmarkComparisonTUIOutcome{err: benchmarkCtx.Err()}
+			return
+		}
+
+		result, err := app.runBenchmarkComparisonWithUpdates(benchmarkCtx, options, func(update *benchmarkComparisonResult) {
+			program.Send(tui.BenchmarkComparisonUpdateMsg{
+				Summary:   benchmarkComparisonTUISummary(update),
+				Cases:     benchmarkComparisonTUICases(update.Cases),
+				Completed: len(update.Cases),
+				Total:     total,
+				Running:   true,
+			})
+		})
+		if err != nil {
+			outcomeCh <- benchmarkComparisonTUIOutcome{err: err}
+			return
+		}
+		outcomeCh <- benchmarkComparisonTUIOutcome{result: result}
+		program.Send(tui.BenchmarkComparisonCompleteMsg{
+			Summary: benchmarkComparisonTUISummary(result),
+			Cases:   benchmarkComparisonTUICases(result.Cases),
+			Total:   total,
+		})
+	}()
+
+	finalModel, err := program.Run()
+	cancel()
+	outcome := <-outcomeCh
+	if err != nil {
+		fmt.Printf("TUI failed: %v, falling back to text mode\n", err)
+		return app.runBenchmarkComparisonText(ctx, options)
+	}
+	if outcome.err != nil {
+		if model, ok := finalModel.(interface{ Quitting() bool }); ok && model.Quitting() {
+			return nil
+		}
+		return fmt.Errorf("benchmark comparison failed: %w", outcome.err)
+	}
+	if options.Output != "" && outcome.result != nil {
+		return app.writeBenchmarkComparisonOutput(outcome.result, options)
+	}
+	return nil
+}
+
+func benchmarkComparisonTotal(options benchmarkOptions) int {
+	return len(options.ComparePatterns) * len(options.CompareChecksum) * len(options.CompareBatches)
+}
+
+func benchmarkComparisonTUISummary(result *benchmarkComparisonResult) tui.BenchmarkComparisonSummary {
+	return tui.BenchmarkComparisonSummary{
+		Platform:             result.Platform,
+		PowerMode:            result.PowerMode,
+		MetalAvailable:       result.MetalAvailable,
+		MetalDeviceName:      result.MetalDeviceName,
+		BestApproach:         result.BestApproach,
+		DecisionReason:       result.BestApproachReason,
+		SpeedupThreshold:     result.SpeedupThreshold,
+		StabilityCVThreshold: result.StabilityCVThreshold,
+	}
+}
+
+func benchmarkComparisonTUICases(cases []benchmarkComparisonCase) []tui.BenchmarkComparisonCase {
+	rows := make([]tui.BenchmarkComparisonCase, 0, len(cases))
+	for _, resultCase := range cases {
+		rows = append(rows, tui.BenchmarkComparisonCase{
+			Pattern:        displayBenchmarkPattern(resultCase.Pattern),
+			Checksum:       resultCase.Checksum,
+			BatchSize:      resultCase.BatchSize,
+			CPU:            benchmarkComparisonSpeed(resultCase.CPU),
+			Auto:           benchmarkComparisonSpeed(resultCase.Auto),
+			AutoEngine:     resultCase.AutoResolvedEngine,
+			Metal:          benchmarkComparisonSpeed(resultCase.Metal),
+			AutoSpeedup:    benchmarkComparisonRatio("auto/cpu", resultCase.AutoSpeedupVsCPU),
+			MetalVsCPU:     benchmarkComparisonRatio("metal/cpu", resultCase.SpeedupVsCPU),
+			MetalVsAuto:    benchmarkComparisonRatio("metal/auto", resultCase.MetalSpeedupVsAuto),
+			MetalStability: benchmarkComparisonMetalStability(resultCase),
+			Decision:       resultCase.Decision,
+			Error:          benchmarkComparisonCaseError(resultCase),
+		})
+	}
+	return rows
+}
+
+func benchmarkComparisonSpeed(result *wallet.BenchmarkResult) string {
+	if result == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f/s", result.AverageSpeed)
+}
+
+func benchmarkComparisonRatio(label string, value float64) string {
+	if value <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s %.2fx", label, value)
+}
+
+func benchmarkComparisonMetalStability(resultCase benchmarkComparisonCase) string {
+	if resultCase.Metal == nil {
+		return ""
+	}
+	return fmt.Sprintf("metal cv %.1f%% stable=%t", resultCase.MetalCoefficientOfVariation*100, resultCase.MetalStable)
+}
+
+func benchmarkComparisonCaseError(resultCase benchmarkComparisonCase) string {
+	parts := make([]string, 0, 3)
+	if resultCase.Error != "" {
+		parts = append(parts, resultCase.Error)
+	}
+	if resultCase.AutoError != "" {
+		parts = append(parts, "auto: "+resultCase.AutoError)
+	}
+	if resultCase.MetalError != "" {
+		parts = append(parts, "metal: "+resultCase.MetalError)
+	}
+	return strings.Join(parts, " | ")
 }
 
 func (app *Application) writeBenchmarkComparisonOutput(result *benchmarkComparisonResult, options benchmarkOptions) error {
@@ -701,7 +986,7 @@ func (app *Application) writeBenchmarkComparisonOutput(result *benchmarkComparis
 
 func renderBenchmarkComparisonResults(result *benchmarkComparisonResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nPhase 6 Benchmark Comparison:\n")
+	fmt.Fprintf(&b, "\nBenchmark Comparison:\n")
 	fmt.Fprintf(&b, "═══════════════════════════════════════\n")
 	fmt.Fprintf(&b, "Platform: %s\n", result.Platform)
 	if result.PowerMode != "" {
@@ -712,20 +997,35 @@ func renderBenchmarkComparisonResults(result *benchmarkComparisonResult) string 
 		fmt.Fprintf(&b, "Metal Device: %s\n", result.MetalDeviceName)
 	}
 	fmt.Fprintf(&b, "Speedup Threshold: %.2fx\n", result.SpeedupThreshold)
-	fmt.Fprintf(&b, "Stability CV Threshold: %.0f%%\n\n", result.StabilityCVThreshold*100)
+	fmt.Fprintf(&b, "Stability CV Threshold: %.0f%%\n", result.StabilityCVThreshold*100)
+	fmt.Fprintf(&b, "Best Approach: %s\n", result.BestApproach)
+	fmt.Fprintf(&b, "Best Approach Reason: %s\n\n", result.BestApproachReason)
 
 	for _, resultCase := range result.Cases {
 		fmt.Fprintf(&b, "Pattern=%s checksum=%s batch=%d\n", displayBenchmarkPattern(resultCase.Pattern), formatBool(resultCase.Checksum), resultCase.BatchSize)
 		if resultCase.CPU != nil {
 			fmt.Fprintf(&b, "  CPU: %.0f addr/s\n", resultCase.CPU.AverageSpeed)
 		}
+		if resultCase.Auto != nil {
+			fmt.Fprintf(&b, "  Auto(%s): %.0f addr/s\n", displayBenchmarkPattern(resultCase.AutoResolvedEngine), resultCase.Auto.AverageSpeed)
+			fmt.Fprintf(&b, "  Auto Speedup vs CPU: %.2fx\n", resultCase.AutoSpeedupVsCPU)
+		}
 		if resultCase.Metal != nil {
 			fmt.Fprintf(&b, "  Metal: %.0f addr/s\n", resultCase.Metal.AverageSpeed)
 			fmt.Fprintf(&b, "  Speedup vs CPU: %.2fx\n", resultCase.SpeedupVsCPU)
+			if resultCase.MetalSpeedupVsAuto > 0 {
+				fmt.Fprintf(&b, "  Metal Speedup vs Auto: %.2fx\n", resultCase.MetalSpeedupVsAuto)
+			}
 			fmt.Fprintf(&b, "  Metal Stability CV: %.1f%%\n", resultCase.MetalCoefficientOfVariation*100)
 		}
 		if resultCase.Error != "" {
 			fmt.Fprintf(&b, "  Error: %s\n", resultCase.Error)
+		}
+		if resultCase.AutoError != "" {
+			fmt.Fprintf(&b, "  Auto Error: %s\n", resultCase.AutoError)
+		}
+		if resultCase.MetalError != "" {
+			fmt.Fprintf(&b, "  Metal Error: %s\n", resultCase.MetalError)
 		}
 		fmt.Fprintf(&b, "  Case Decision: %s\n", resultCase.Decision)
 	}
@@ -799,21 +1099,49 @@ func newBenchmarkTUIEngineInfo(options benchmarkOptions, threadCount int) tui.En
 	return info
 }
 
-func sendBenchmarkTUISample(program *tea.Program, criteria wallet.GenerationCriteria, sample benchmarkSample) {
+func sendBenchmarkTUISample(program *tea.Program, options benchmarkOptions, sample benchmarkSample) {
 	avgSpeed := sample.Speed
 	if sample.Result != nil {
 		avgSpeed = sample.Result.AverageSpeed
 	}
+	progressPercent := benchmarkTUIProgressPercent(options, sample)
 	program.Send(tui.BenchmarkUpdateMsg{
 		Running: sample.Result == nil,
 		Progress: tui.ProgressMsg{
-			Attempts:      sample.Attempts,
-			Speed:         sample.Speed,
-			Pattern:       criteria.GetPattern(),
-			Difficulty:    calculateDifficulty(criteria),
-			EstimatedTime: estimateBenchmarkRemaining(criteria, sample.Attempts, avgSpeed),
+			Attempts:        sample.Attempts,
+			Speed:           sample.Speed,
+			Pattern:         options.Criteria.GetPattern(),
+			Difficulty:      calculateDifficulty(options.Criteria),
+			EstimatedTime:   estimateBenchmarkRemaining(options.Criteria, sample.Attempts, avgSpeed),
+			ProgressPercent: progressPercent,
+			IsComplete:      progressPercent >= 100 || sample.Result != nil,
 		},
 	})
+}
+
+func benchmarkTUIProgressPercent(options benchmarkOptions, sample benchmarkSample) float64 {
+	if sample.Result != nil {
+		return 100
+	}
+	byAttempts := 0.0
+	if options.Attempts > 0 {
+		byAttempts = float64(sample.Attempts) / float64(options.Attempts) * 100
+	}
+	byDuration := 0.0
+	if options.Duration > 0 {
+		byDuration = float64(sample.Elapsed) / float64(options.Duration) * 100
+	}
+	progress := byAttempts
+	if byDuration > progress {
+		progress = byDuration
+	}
+	if progress > 100 {
+		return 100
+	}
+	if progress < 0 {
+		return 0
+	}
+	return progress
 }
 
 func estimateBenchmarkRemaining(criteria wallet.GenerationCriteria, attempts int64, speed float64) time.Duration {

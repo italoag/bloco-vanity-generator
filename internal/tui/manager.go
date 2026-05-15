@@ -304,6 +304,10 @@ func (tm *TUIManager) CreateBenchmarkModelWithEngine(engineInfo EngineInfo) tea.
 	return NewBenchmarkModel().WithEngineInfo(engineInfo)
 }
 
+func (tm *TUIManager) CreateBenchmarkComparisonModel(summary BenchmarkComparisonSummary, total int) tea.Model {
+	return NewBenchmarkComparisonModel(summary, total)
+}
+
 // CreateStatsModel creates a statistics TUI model
 func (tm *TUIManager) CreateStatsModel(stats *wallet.GenerationStats) tea.Model {
 	return NewStatsModel(stats)

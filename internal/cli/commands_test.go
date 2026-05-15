@@ -161,7 +161,7 @@ func TestGetGenerationEngineOptionsRejectsDisabledCPUVerificationForMetal(t *tes
 		if err == nil {
 			t.Fatalf("expected disabled CPU verification error")
 		}
-		if !strings.Contains(err.Error(), "Phase 4 requires full CPU verification") {
+		if !strings.Contains(err.Error(), "requires full CPU verification") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -289,7 +289,7 @@ func TestResolveMetalValidationConfigRejectsDisabledCPUVerificationForMetal(t *t
 	if err == nil {
 		t.Fatalf("expected disabled CPU verification error")
 	}
-	if !strings.Contains(err.Error(), "Phase 4 requires full CPU verification") {
+	if !strings.Contains(err.Error(), "requires full CPU verification") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -518,6 +518,36 @@ func TestRunBenchmarkEngineProcessesRealAttempts(t *testing.T) {
 
 	if result.ScalarBaseMultDuration <= 0 {
 		t.Fatalf("expected scalar timing to be recorded")
+	}
+}
+
+func TestBenchmarkTUIProgressPercentUsesAttemptsAndDuration(t *testing.T) {
+	options := benchmarkOptions{
+		Attempts: 100,
+		Duration: 10 * time.Second,
+	}
+	percent := benchmarkTUIProgressPercent(options, benchmarkSample{
+		Attempts: 25,
+		Elapsed:  2 * time.Second,
+	})
+	if percent != 25 {
+		t.Fatalf("expected progress to use attempts when greater, got %.2f", percent)
+	}
+
+	percent = benchmarkTUIProgressPercent(options, benchmarkSample{
+		Attempts: 10,
+		Elapsed:  5 * time.Second,
+	})
+	if percent != 50 {
+		t.Fatalf("expected progress to use duration when greater, got %.2f", percent)
+	}
+
+	percent = benchmarkTUIProgressPercent(options, benchmarkSample{
+		Attempts: 200,
+		Elapsed:  20 * time.Second,
+	})
+	if percent != 100 {
+		t.Fatalf("expected progress to be clamped to 100, got %.2f", percent)
 	}
 }
 

@@ -992,19 +992,30 @@ func (app *Application) createBenchmarkCommand() *cobra.Command {
 		RunE:  app.runBenchmark,
 	}
 
-	// Add benchmark-specific flags
+	app.addBenchmarkFlags(cmd, false)
+	compareCmd := &cobra.Command{
+		Use:   "compare",
+		Short: "Compare CPU, auto, and Metal benchmark performance",
+		Long:  "Run a benchmark comparison matrix across CPU, auto, and Metal for one or more patterns, batch sizes, and checksum modes.",
+		RunE:  app.runBenchmark,
+	}
+	app.addBenchmarkFlags(compareCmd, true)
+	cmd.AddCommand(compareCmd)
+
+	return cmd
+}
+
+func (app *Application) addBenchmarkFlags(cmd *cobra.Command, compareDefault bool) {
 	cmd.Flags().Int("attempts", 10000, "Number of attempts for benchmark")
 	cmd.Flags().Duration("duration", 30*time.Second, "Benchmark duration")
 	cmd.Flags().Bool("detailed", false, "Show detailed per-thread statistics")
 	cmd.Flags().Int("batch-size", 5000, "Number of candidates processed per benchmark worker batch")
 	cmd.Flags().String("pattern", "", "Address prefix pattern for benchmark compatibility")
-	cmd.Flags().String("metal-validation", engine.MetalValidationFull, "Metal CPU validation mode (Phase 4 requires full)")
-	cmd.Flags().Bool("compare", false, "Run Phase 6 CPU vs Metal comparison matrix")
-	cmd.Flags().String("compare-patterns", "ab,abcd,abcdef", "Comma-separated prefix patterns for Phase 6 comparison")
-	cmd.Flags().String("compare-batch-sizes", "1000,5000,10000", "Comma-separated batch sizes for Phase 6 comparison")
-	cmd.Flags().String("compare-checksums", "off,on", "Comma-separated checksum modes for Phase 6 comparison (off,on)")
-
-	return cmd
+	cmd.Flags().String("metal-validation", engine.MetalValidationFull, "Metal CPU validation mode (requires full)")
+	cmd.Flags().Bool("compare", compareDefault, "CPU vs Auto vs Metal comparison matrix")
+	cmd.Flags().String("compare-patterns", "ab,abcd,abcdef", "Comma-separated prefix patterns for comparison")
+	cmd.Flags().String("compare-batch-sizes", "1000,5000,10000", "Comma-separated batch sizes for comparison")
+	cmd.Flags().String("compare-checksums", "off,on", "Comma-separated checksum modes for comparison (off,on)")
 }
 
 // runBenchmark runs performance benchmarks
@@ -1016,6 +1027,10 @@ func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if options.Compare {
+		tuiManager := tui.NewTUIManager()
+		if options.Format == benchmarkFormatText && options.Output == "" && options.UseTUI && tuiManager.ShouldUseTUI() {
+			return app.runBenchmarkComparisonTUI(ctx, options)
+		}
 		return app.runBenchmarkComparisonText(ctx, options)
 	}
 
@@ -1064,7 +1079,7 @@ func (app *Application) runBenchmarkTUI(ctx context.Context, options benchmarkOp
 
 		// Run benchmark and send updates to TUI
 		result, err := app.runBenchmarkEngine(benchmarkCtx, options, 500*time.Millisecond, func(sample benchmarkSample) {
-			sendBenchmarkTUISample(program, options.Criteria, sample)
+			sendBenchmarkTUISample(program, options, sample)
 		})
 		if err != nil {
 			outcomeCh <- benchmarkTUIOutcome{err: err}

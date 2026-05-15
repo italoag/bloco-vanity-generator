@@ -146,27 +146,19 @@ func (m BenchmarkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.Results != nil {
 			m.results = msg.Results
-			if !msg.Running && m.state == BenchmarkStateProgress {
-				m.state = BenchmarkStateTransitioning
-				m.transitionTime = time.Now()
+			if !msg.Running {
+				m.state = BenchmarkStateResults
+				m.table.SetRows(m.generateResultsRows())
 			}
 		}
 
 	case BenchmarkCompleteMsg:
 		m.results = msg.Results
 		m.running = false
-		m.state = BenchmarkStateTransitioning
-		m.transitionTime = time.Now()
+		m.state = BenchmarkStateResults
+		m.table.SetRows(m.generateResultsRows())
 
 	case TickMsg:
-		// Handle smooth transitions
-		if m.state == BenchmarkStateTransitioning {
-			if time.Since(m.transitionTime) > 500*time.Millisecond {
-				m.state = BenchmarkStateResults
-				m.table.SetRows(m.generateResultsRows())
-			}
-		}
-
 		// Continue ticking for animations
 		cmds = append(cmds, tickCmd())
 
@@ -195,9 +187,9 @@ func (m BenchmarkModel) View() string {
 	case BenchmarkStateProgress:
 		return m.renderProgressView()
 	case BenchmarkStateTransitioning:
-		return m.renderTransitionView()
+		return m.renderProgressView()
 	case BenchmarkStateResults:
-		return m.renderResultsView()
+		return m.renderProgressView()
 	default:
 		return m.renderProgressView()
 	}
@@ -212,7 +204,11 @@ func (m BenchmarkModel) renderProgressView() string {
 	b.WriteString("\n")
 
 	// Header
-	header := m.styleManager.FormatHeader("Benchmark Running")
+	headerText := "Benchmark Running"
+	if m.state == BenchmarkStateResults {
+		headerText = "Benchmark Complete"
+	}
+	header := m.styleManager.FormatHeader(headerText)
 	b.WriteString(header + "\n\n")
 
 	// Engine diagnostics (matches the text-mode benchmark header)
@@ -222,28 +218,17 @@ func (m BenchmarkModel) renderProgressView() string {
 	}
 
 	// Progress bar
-	if m.progressMsg.Attempts > 0 {
-		// Calculate progress percentage based on attempts vs estimated total
-		// Use a more sophisticated progress calculation
-		var progressPercent float64
-		if m.progressMsg.EstimatedTime > 0 && m.progressMsg.Speed > 0 {
-			// Calculate based on time elapsed vs estimated time
-			totalEstimatedAttempts := float64(m.progressMsg.EstimatedTime.Seconds()) * m.progressMsg.Speed
-			if totalEstimatedAttempts > 0 {
-				progressPercent = float64(m.progressMsg.Attempts) / totalEstimatedAttempts
-			}
-		} else {
-			// Fallback: use a rough estimate based on attempts
-			progressPercent = float64(m.progressMsg.Attempts) / 50000.0 // Assume max 50k attempts
+	if m.progressMsg.Attempts > 0 || m.progressMsg.ProgressPercent > 0 || m.progressMsg.IsComplete {
+		progressPercent := m.progressMsg.ProgressPercent / 100.0
+		if m.progressMsg.IsComplete || m.state == BenchmarkStateResults {
+			progressPercent = 1.0
 		}
-
 		if progressPercent > 1.0 {
 			progressPercent = 1.0
 		}
 		if progressPercent < 0 {
 			progressPercent = 0
 		}
-
 		progressBar := m.progress.ViewAs(progressPercent)
 		b.WriteString(progressBar + "\n\n")
 	}
@@ -294,8 +279,18 @@ func (m BenchmarkModel) renderProgressView() string {
 
 	b.WriteString(metricsStyle.Render(metrics) + "\n\n")
 
+	if m.results != nil {
+		b.WriteString(pad)
+		b.WriteString(m.styleManager.FormatSubtitle("Results"))
+		b.WriteString("\n")
+		tableStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(PrimaryColor))
+		b.WriteString(tableStyle.Render(m.table.View()) + "\n\n")
+	}
+
 	// Help text
-	helpText := helpStyle("Press q to quit • Ctrl+C to exit")
+	helpText := helpStyle("↑/↓: Navigate results • q: Quit • Ctrl+C: Exit")
 	b.WriteString(helpText)
 
 	return b.String()
