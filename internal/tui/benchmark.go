@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -46,6 +45,10 @@ type BenchmarkModel struct {
 func (m BenchmarkModel) WithEngineInfo(info EngineInfo) BenchmarkModel {
 	m.engineInfo = info
 	return m
+}
+
+func (m BenchmarkModel) Quitting() bool {
+	return m.quitting
 }
 
 // BenchmarkUpdateMsg represents a benchmark update message
@@ -137,7 +140,6 @@ func (m BenchmarkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case BenchmarkUpdateMsg:
-		fmt.Fprintf(os.Stderr, "DEBUG: TUI received update - attempts: %d, speed: %.2f\n", msg.Progress.Attempts, msg.Progress.Speed)
 		m.progressMsg = msg.Progress
 		m.running = msg.Running
 		m.lastUpdate = time.Now()

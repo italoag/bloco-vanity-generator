@@ -633,6 +633,7 @@ func (e *MetalEngine) GenerateWallet(ctx context.Context, options GenerationOpti
 		candidate, err := findValidatedMetalGenerationCandidate(privateKeys, prefixNibbles, suffixNibbles, gpuMatches, options.Criteria, validationMode)
 		zeroBytes(privateKeys)
 		if err != nil {
+			zeroBytes(candidate.PrivateKey[:])
 			return nil, err
 		}
 
@@ -904,7 +905,8 @@ func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, su
 	}
 
 	if gpuMatches != candidate.RawMatches {
-		return candidate, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, candidate.RawMatches)
+		zeroBytes(candidate.PrivateKey[:])
+		return metalGenerationCandidate{}, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, candidate.RawMatches)
 	}
 	return candidate, nil
 }

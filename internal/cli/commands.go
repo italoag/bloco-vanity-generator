@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -926,7 +927,7 @@ func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 	// Check if TUI should be used
 	tuiManager := tui.NewTUIManager()
 
-	if options.Format == benchmarkFormatText && options.UseTUI && tuiManager.ShouldUseTUI() {
+	if options.Format == benchmarkFormatText && options.Output == "" && options.UseTUI && tuiManager.ShouldUseTUI() {
 		return app.runBenchmarkTUI(ctx, options)
 	}
 
@@ -936,11 +937,20 @@ func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 
 // runBenchmarkTUI runs benchmark with TUI interface
 func (app *Application) runBenchmarkTUI(ctx context.Context, options benchmarkOptions) error {
+	type benchmarkTUIOutcome struct {
+		result *wallet.BenchmarkResult
+		err    error
+	}
+
 	// Create TUI benchmark model preloaded with engine diagnostics so the
 	// running and results views show the same engine, device and batch info
 	// emitted by runBenchmarkText.
 	tuiManager := tui.NewTUIManager()
 	benchmarkModel := tuiManager.CreateBenchmarkModelWithEngine(newBenchmarkTUIEngineInfo(options, app.config.Worker.ThreadCount))
+
+	benchmarkCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	outcomeCh := make(chan benchmarkTUIOutcome, 1)
 
 	// Create TUI program
 	program := tea.NewProgram(benchmarkModel, tea.WithAltScreen())
@@ -948,26 +958,53 @@ func (app *Application) runBenchmarkTUI(ctx context.Context, options benchmarkOp
 	// Start benchmark in background
 	go func() {
 		// Give TUI time to initialize
-		time.Sleep(200 * time.Millisecond)
+		timer := time.NewTimer(200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-benchmarkCtx.Done():
+			outcomeCh <- benchmarkTUIOutcome{err: benchmarkCtx.Err()}
+			return
+		}
 
 		// Run benchmark and send updates to TUI
-		result, err := app.runBenchmarkEngine(ctx, options, 500*time.Millisecond, func(sample benchmarkSample) {
+		result, err := app.runBenchmarkEngine(benchmarkCtx, options, 500*time.Millisecond, func(sample benchmarkSample) {
 			sendBenchmarkTUISample(program, options.Criteria, sample)
 		})
 		if err != nil {
+			outcomeCh <- benchmarkTUIOutcome{err: err}
 			program.Send(tui.BenchmarkCompleteMsg{Results: nil})
 			return
 		}
+
+		outcomeCh <- benchmarkTUIOutcome{result: result}
 
 		// Send completion message
 		program.Send(tui.BenchmarkCompleteMsg{Results: result})
 	}()
 
 	// Run the TUI program
-	if _, err := program.Run(); err != nil {
+	finalModel, err := program.Run()
+	cancel()
+	outcome := <-outcomeCh
+	if err != nil {
 		// If TUI fails, fallback to text mode
 		fmt.Printf("TUI failed: %v, falling back to text mode\n", err)
 		return app.runBenchmarkText(ctx, options)
+	}
+
+	if outcome.err != nil {
+		if benchmarkCtx.Err() != nil && (stderrors.Is(outcome.err, context.Canceled) || stderrors.Is(outcome.err, context.DeadlineExceeded)) {
+			if model, ok := finalModel.(interface{ Quitting() bool }); ok && model.Quitting() {
+				return nil
+			}
+		}
+		return errors.WrapError(outcome.err, errors.ErrorTypeGeneration,
+			"run_benchmark", "benchmark execution failed")
+	}
+
+	if options.Output != "" && outcome.result != nil {
+		return app.writeBenchmarkOutput(outcome.result, options)
 	}
 
 	return nil
