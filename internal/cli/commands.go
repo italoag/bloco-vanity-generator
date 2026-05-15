@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"bloco-vgen/internal/config"
 	"bloco-vgen/internal/crypto"
 	"bloco-vgen/internal/crypto/kdf"
+	"bloco-vgen/internal/engine"
 	"bloco-vgen/internal/tui"
 	"bloco-vgen/internal/validation"
 	"bloco-vgen/internal/worker"
@@ -89,6 +89,7 @@ func (app *Application) addGlobalFlags() {
 
 	// Performance parameters
 	flags.IntP("threads", "t", 0, "Number of worker threads (0 = auto-detect)")
+	flags.String("engine", "auto", "Generation engine (auto, cpu, metal)")
 	flags.Bool("progress", false, "Show progress information")
 	flags.Bool("tui", true, "Use terminal UI (when available)")
 
@@ -131,6 +132,16 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 	if err := app.parseFlags(cmd); err != nil {
 		return errors.WrapError(err, errors.ErrorTypeConfiguration,
 			"parse_flags", "failed to parse command flags")
+	}
+
+	engineSelection, err := resolveCommandEngine(cmd)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"resolve_engine", "failed to resolve generation engine")
+	}
+	if engineSelection.Resolved != engine.NameCPU {
+		return errors.NewConfigurationError("resolve_engine",
+			"metal generation engine is benchmark-only; use benchmark --engine metal for validation")
 	}
 
 	// Get generation parameters
@@ -846,6 +857,8 @@ func (app *Application) createBenchmarkCommand() *cobra.Command {
 	cmd.Flags().Int("attempts", 10000, "Number of attempts for benchmark")
 	cmd.Flags().Duration("duration", 30*time.Second, "Benchmark duration")
 	cmd.Flags().Bool("detailed", false, "Show detailed per-thread statistics")
+	cmd.Flags().Int("batch-size", 5000, "Number of candidates processed per benchmark worker batch")
+	cmd.Flags().String("pattern", "", "Address prefix pattern for benchmark compatibility")
 
 	return cmd
 }
@@ -854,38 +867,24 @@ func (app *Application) createBenchmarkCommand() *cobra.Command {
 func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	attempts, _ := cmd.Flags().GetInt("attempts")
-	duration, _ := cmd.Flags().GetDuration("duration")
-	detailed, _ := cmd.Flags().GetBool("detailed")
+	options, err := app.getBenchmarkOptions(cmd)
+	if err != nil {
+		return err
+	}
 
 	// Check if TUI should be used
 	tuiManager := tui.NewTUIManager()
-	useTUI, _ := cmd.Flags().GetBool("tui")
 
-	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.runBenchmarkTUI(ctx, attempts, duration, detailed)
+	if options.Format == benchmarkFormatText && options.UseTUI && tuiManager.ShouldUseTUI() {
+		return app.runBenchmarkTUI(ctx, options)
 	}
 
 	// Fallback to text mode
-	return app.runBenchmarkText(ctx, attempts, duration, detailed)
+	return app.runBenchmarkText(ctx, options)
 }
 
 // runBenchmarkTUI runs benchmark with TUI interface
-func (app *Application) runBenchmarkTUI(ctx context.Context, attempts int, duration time.Duration, detailed bool) error {
-	// Create worker pool
-	workerPool := worker.NewPool(app.config.Worker.ThreadCount, "ethereum")
-
-	// Start worker pool
-	if err := workerPool.Start(); err != nil {
-		return errors.WrapError(err, errors.ErrorTypeWorker,
-			"run_benchmark_tui", "failed to start worker pool")
-	}
-	defer func() {
-		if err := workerPool.Shutdown(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to shutdown worker pool: %v\n", err)
-		}
-	}()
-
+func (app *Application) runBenchmarkTUI(ctx context.Context, options benchmarkOptions) error {
 	// Create TUI benchmark model
 	tuiManager := tui.NewTUIManager()
 	benchmarkModel := tuiManager.CreateBenchmarkModel()
@@ -899,7 +898,9 @@ func (app *Application) runBenchmarkTUI(ctx context.Context, attempts int, durat
 		time.Sleep(200 * time.Millisecond)
 
 		// Run benchmark and send updates to TUI
-		result, err := app.executeBenchmarkWithTUI(ctx, workerPool, attempts, duration, program)
+		result, err := app.runBenchmarkEngine(ctx, options, 500*time.Millisecond, func(sample benchmarkSample) {
+			sendBenchmarkTUISample(program, options.Criteria, sample)
+		})
 		if err != nil {
 			program.Send(tui.BenchmarkCompleteMsg{Results: nil})
 			return
@@ -913,42 +914,46 @@ func (app *Application) runBenchmarkTUI(ctx context.Context, attempts int, durat
 	if _, err := program.Run(); err != nil {
 		// If TUI fails, fallback to text mode
 		fmt.Printf("TUI failed: %v, falling back to text mode\n", err)
-		return app.runBenchmarkText(ctx, attempts, duration, detailed)
+		return app.runBenchmarkText(ctx, options)
 	}
 
 	return nil
 }
 
 // runBenchmarkText runs benchmark in text mode
-func (app *Application) runBenchmarkText(ctx context.Context, attempts int, duration time.Duration, detailed bool) error {
-	fmt.Printf("Running benchmark...\n")
-	fmt.Printf("Attempts: %s\n", formatLargeNumber(int64(attempts)))
-	fmt.Printf("Duration: %v\n", duration)
-	fmt.Printf("Threads: %d\n\n", app.config.Worker.ThreadCount)
-
-	// Create worker pool
-	workerPool := worker.NewPool(app.config.Worker.ThreadCount, "ethereum")
-
-	// Start worker pool
-	if err := workerPool.Start(); err != nil {
-		return errors.WrapError(err, errors.ErrorTypeWorker,
-			"run_benchmark", "failed to start worker pool")
-	}
-	defer func() {
-		if err := workerPool.Shutdown(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to shutdown worker pool: %v\n", err)
+func (app *Application) runBenchmarkText(ctx context.Context, options benchmarkOptions) error {
+	if options.Format == benchmarkFormatText {
+		fmt.Printf("Running benchmark...\n")
+		fmt.Printf("Engine: %s\n", options.Engine)
+		if options.FallbackReason != "" {
+			fmt.Printf("Fallback: %s\n", options.FallbackReason)
 		}
-	}()
+		fmt.Printf("Network: %s\n", options.Network)
+		fmt.Printf("Pattern: %s\n", displayBenchmarkPattern(options.Criteria.GetPattern()))
+		fmt.Printf("Attempts: %s\n", formatLargeNumber(int64(options.Attempts)))
+		fmt.Printf("Duration: %v\n", options.Duration)
+		fmt.Printf("Batch Size: %d\n", options.BatchSize)
+		fmt.Printf("Threads: %d\n\n", app.config.Worker.ThreadCount)
+	}
 
-	// Run benchmark
-	result, err := app.executeBenchmark(ctx, workerPool, attempts, duration)
+	var onSample func(benchmarkSample)
+	if options.Format == benchmarkFormatText {
+		onSample = func(sample benchmarkSample) {
+			fmt.Printf("\rSample: %.0f addr/s (total: %s attempts, matches: %s)",
+				sample.Speed, formatLargeNumber(sample.Attempts), formatLargeNumber(sample.Matches))
+		}
+	}
+
+	result, err := app.runBenchmarkEngine(ctx, options, time.Second, onSample)
 	if err != nil {
 		return errors.WrapError(err, errors.ErrorTypeGeneration,
 			"run_benchmark", "benchmark execution failed")
 	}
 
-	// Display results
-	return app.displayBenchmarkResults(result, detailed)
+	if options.Format == benchmarkFormatText {
+		fmt.Printf("\nBenchmark completed!\n")
+	}
+	return app.writeBenchmarkOutput(result, options)
 }
 
 // createVersionCommand creates the version subcommand
@@ -1501,416 +1506,6 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		fmt.Printf("  Min attempts: %s\n", formatLargeNumber(minAttempts))
 		fmt.Printf("  Max attempts: %s\n", formatLargeNumber(maxAttempts))
 		fmt.Printf("  Success rate: %.2f%%\n", float64(len(results))/float64(totalAttempts)*100)
-	}
-
-	return nil
-}
-
-// executeBenchmarkWithTUI runs benchmark and sends updates to TUI
-func (app *Application) executeBenchmarkWithTUI(ctx context.Context, workerPool worker.WorkerPool, attempts int, duration time.Duration, program *tea.Program) (*wallet.BenchmarkResult, error) {
-	// Create a simple generation criteria for benchmarking
-	criteria := wallet.GenerationCriteria{
-		Prefix:     "abc", // Simple pattern for benchmarking
-		Suffix:     "",
-		IsChecksum: false,
-	}
-
-	startTime := time.Now()
-	var totalAttempts int64
-	var speedSamples []float64
-	var durationSamples []time.Duration
-
-	// Get stats collector for monitoring
-	statsCollector := workerPool.GetStatsCollector()
-
-	// Run benchmark for specified duration or attempts
-	benchmarkCtx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
-
-	// Sample performance every 500ms for smoother TUI updates
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	lastAttempts := int64(0)
-	sampleCount := 0
-
-	for {
-		select {
-		case <-benchmarkCtx.Done():
-			// Benchmark completed
-			goto benchmarkComplete
-
-		case <-ticker.C:
-			// Sample current performance
-			currentStats := statsCollector.GetAggregatedStats()
-			currentAttempts := currentStats.TotalAttempts
-
-			if currentAttempts > lastAttempts {
-				speed := float64(currentAttempts-lastAttempts) / 0.5 // Per second
-				speedSamples = append(speedSamples, speed)
-				durationSamples = append(durationSamples, 500*time.Millisecond)
-
-				// Calculate current statistics
-				var avgSpeed, minSpeed, maxSpeed float64
-				if len(speedSamples) > 0 {
-					var sum float64
-					minSpeed = speedSamples[0]
-					maxSpeed = speedSamples[0]
-
-					for _, s := range speedSamples {
-						sum += s
-						if s < minSpeed {
-							minSpeed = s
-						}
-						if s > maxSpeed {
-							maxSpeed = s
-						}
-					}
-					avgSpeed = sum / float64(len(speedSamples))
-				}
-
-				// Calculate estimated time remaining
-				remainingAttempts := int64(attempts) - currentAttempts
-				var estimatedTime time.Duration
-				if avgSpeed > 0 && remainingAttempts > 0 {
-					estimatedTime = time.Duration(float64(remainingAttempts)/avgSpeed) * time.Second
-				}
-
-				// Get performance metrics
-				perfMetrics := statsCollector.GetPerformanceMetrics()
-
-				// Send update to TUI
-				program.Send(tui.BenchmarkUpdateMsg{
-					Running: true,
-					Progress: tui.ProgressMsg{
-						Attempts:      currentAttempts,
-						Speed:         speed,
-						Pattern:       criteria.GetPattern(),
-						Difficulty:    calculateDifficulty(criteria),
-						EstimatedTime: estimatedTime,
-					},
-					Results: &wallet.BenchmarkResult{
-						TotalAttempts:         currentAttempts,
-						TotalDuration:         time.Since(startTime),
-						AverageSpeed:          avgSpeed,
-						MinSpeed:              minSpeed,
-						MaxSpeed:              maxSpeed,
-						SpeedSamples:          speedSamples,
-						DurationSamples:       durationSamples,
-						ThreadCount:           perfMetrics.WorkerCount,
-						ScalabilityEfficiency: perfMetrics.EfficiencyRatio,
-						ThreadBalanceScore:    perfMetrics.ThreadBalanceScore,
-						ThreadUtilization:     perfMetrics.CPUUtilization,
-						SpeedupVsSingleThread: perfMetrics.SpeedupVsSingleThread,
-						SingleThreadSpeed:     perfMetrics.EstimatedSingleThreadSpeed,
-					},
-				})
-
-				lastAttempts = currentAttempts
-				sampleCount++
-			}
-
-			// Check if we've reached the attempt limit
-			if int(currentAttempts) >= attempts {
-				cancel()
-			}
-
-		default:
-			// Submit work continuously to keep workers busy
-			for i := 0; i < app.config.Worker.ThreadCount; i++ {
-				workItem := worker.WorkItem{
-					Criteria:  criteria,
-					BatchSize: 1000, // Smaller batch for more frequent updates
-					ID:        fmt.Sprintf("bench-%d-%d", time.Now().UnixNano(), i),
-				}
-
-				select {
-				case <-benchmarkCtx.Done():
-					goto benchmarkComplete
-				default:
-					// TODO: Implement benchmark with ants pool
-					_ = workItem // Avoid unused variable for now
-				}
-			}
-
-			// Small delay to prevent busy waiting
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-benchmarkComplete:
-	totalDuration := time.Since(startTime)
-	finalStats := statsCollector.GetAggregatedStats()
-	totalAttempts = finalStats.TotalAttempts
-
-	// Calculate final statistics
-	var avgSpeed, minSpeed, maxSpeed float64
-	if len(speedSamples) > 0 {
-		var sum float64
-		minSpeed = speedSamples[0]
-		maxSpeed = speedSamples[0]
-
-		for _, speed := range speedSamples {
-			sum += speed
-			if speed < minSpeed {
-				minSpeed = speed
-			}
-			if speed > maxSpeed {
-				maxSpeed = speed
-			}
-		}
-		avgSpeed = sum / float64(len(speedSamples))
-	}
-
-	// Get final performance metrics
-	perfMetrics := statsCollector.GetPerformanceMetrics()
-
-	return &wallet.BenchmarkResult{
-		TotalAttempts:         totalAttempts,
-		TotalDuration:         totalDuration,
-		AverageSpeed:          avgSpeed,
-		MinSpeed:              minSpeed,
-		MaxSpeed:              maxSpeed,
-		SpeedSamples:          speedSamples,
-		DurationSamples:       durationSamples,
-		ThreadCount:           perfMetrics.WorkerCount,
-		ScalabilityEfficiency: perfMetrics.EfficiencyRatio,
-		ThreadBalanceScore:    perfMetrics.ThreadBalanceScore,
-		ThreadUtilization:     perfMetrics.CPUUtilization,
-		SpeedupVsSingleThread: perfMetrics.SpeedupVsSingleThread,
-		SingleThreadSpeed:     perfMetrics.EstimatedSingleThreadSpeed,
-	}, nil
-}
-
-func (app *Application) executeBenchmark(ctx context.Context, workerPool worker.WorkerPool, attempts int, duration time.Duration) (*wallet.BenchmarkResult, error) {
-	fmt.Printf("Starting benchmark...\n")
-
-	// Create a simple generation criteria for benchmarking
-	criteria := wallet.GenerationCriteria{
-		Prefix:     "",
-		Suffix:     "",
-		IsChecksum: false,
-	}
-
-	startTime := time.Now()
-	var totalAttempts int64
-	var speedSamples []float64
-	var durationSamples []time.Duration
-
-	// Get stats collector for monitoring
-	statsCollector := workerPool.GetStatsCollector()
-
-	// Run benchmark for specified duration or attempts
-	benchmarkCtx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
-
-	// Sample performance every second
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	lastAttempts := int64(0)
-	sampleCount := 0
-
-	for {
-		select {
-		case <-benchmarkCtx.Done():
-			// Benchmark completed
-			goto benchmarkComplete
-
-		case <-ticker.C:
-			// Sample current performance
-			currentStats := statsCollector.GetAggregatedStats()
-			currentAttempts := currentStats.TotalAttempts
-
-			if currentAttempts > lastAttempts {
-				speed := float64(currentAttempts - lastAttempts)
-				speedSamples = append(speedSamples, speed)
-				durationSamples = append(durationSamples, time.Second)
-
-				fmt.Printf("\rSample %d: %.0f addr/s (total: %s attempts)",
-					sampleCount+1, speed, formatLargeNumber(currentAttempts))
-
-				lastAttempts = currentAttempts
-				sampleCount++
-			}
-
-			// Check if we've reached the attempt limit
-			if int(currentAttempts) >= attempts {
-				cancel()
-			}
-
-		default:
-			// Submit work continuously to keep workers busy
-			for i := 0; i < app.config.Worker.ThreadCount; i++ {
-				workItem := worker.WorkItem{
-					Criteria:  criteria,
-					BatchSize: 5000, // Large batch for benchmarking
-					ID:        fmt.Sprintf("bench-%d-%d", time.Now().UnixNano(), i),
-				}
-
-				select {
-				case <-benchmarkCtx.Done():
-					goto benchmarkComplete
-				default:
-					// TODO: Implement benchmark with ants pool
-					_ = workItem // Avoid unused variable for now
-				}
-			}
-
-			// Small delay to prevent busy waiting
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-benchmarkComplete:
-	totalDuration := time.Since(startTime)
-	finalStats := statsCollector.GetAggregatedStats()
-	totalAttempts = finalStats.TotalAttempts
-
-	fmt.Printf("\nBenchmark completed!\n")
-
-	// Calculate statistics
-	var avgSpeed, minSpeed, maxSpeed float64
-	if len(speedSamples) > 0 {
-		var sum float64
-		minSpeed = speedSamples[0]
-		maxSpeed = speedSamples[0]
-
-		for _, speed := range speedSamples {
-			sum += speed
-			if speed < minSpeed {
-				minSpeed = speed
-			}
-			if speed > maxSpeed {
-				maxSpeed = speed
-			}
-		}
-		avgSpeed = sum / float64(len(speedSamples))
-	}
-
-	// Get performance metrics
-	perfMetrics := statsCollector.GetPerformanceMetrics()
-
-	return &wallet.BenchmarkResult{
-		TotalAttempts:         totalAttempts,
-		TotalDuration:         totalDuration,
-		AverageSpeed:          avgSpeed,
-		MinSpeed:              minSpeed,
-		MaxSpeed:              maxSpeed,
-		SpeedSamples:          speedSamples,
-		DurationSamples:       durationSamples,
-		ThreadCount:           perfMetrics.WorkerCount,
-		ScalabilityEfficiency: perfMetrics.EfficiencyRatio,
-		ThreadBalanceScore:    perfMetrics.ThreadBalanceScore,
-		ThreadUtilization:     perfMetrics.CPUUtilization,
-		SpeedupVsSingleThread: perfMetrics.SpeedupVsSingleThread,
-		SingleThreadSpeed:     perfMetrics.EstimatedSingleThreadSpeed,
-	}, nil
-}
-
-func (app *Application) displayBenchmarkResults(result *wallet.BenchmarkResult, detailed bool) error {
-	fmt.Printf("\nBenchmark Results:\n")
-	fmt.Printf("═══════════════════════════════════════\n")
-
-	// Basic metrics
-	fmt.Printf("Total Attempts: %s\n", formatLargeNumber(result.TotalAttempts))
-	fmt.Printf("Duration: %s\n", formatDuration(result.TotalDuration))
-	fmt.Printf("Average Speed: %.0f addr/s\n", result.AverageSpeed)
-
-	if result.MinSpeed > 0 && result.MaxSpeed > 0 {
-		fmt.Printf("Speed Range: %.0f - %.0f addr/s\n", result.MinSpeed, result.MaxSpeed)
-	}
-
-	// Thread performance
-	if result.ThreadCount > 1 {
-		fmt.Printf("\nMulti-Threading Performance:\n")
-		fmt.Printf("Threads Used: %d\n", result.ThreadCount)
-		fmt.Printf("Thread Efficiency: %.1f%%\n", result.ScalabilityEfficiency*100)
-		fmt.Printf("Thread Balance: %.1f%%\n", result.ThreadBalanceScore*100)
-
-		if result.SingleThreadSpeed > 0 {
-			fmt.Printf("Estimated Single-Thread Speed: %.0f addr/s\n", result.SingleThreadSpeed)
-			fmt.Printf("Multi-Thread Speedup: %.2fx\n", result.SpeedupVsSingleThread)
-
-			idealSpeedup := float64(result.ThreadCount)
-			actualEfficiency := result.SpeedupVsSingleThread / idealSpeedup * 100
-			fmt.Printf("Parallel Efficiency: %.1f%% (%.2fx of %dx ideal)\n",
-				actualEfficiency, result.SpeedupVsSingleThread, result.ThreadCount)
-		}
-	}
-
-	// Detailed statistics
-	if detailed && len(result.SpeedSamples) > 0 {
-		fmt.Printf("\nDetailed Performance Samples:\n")
-
-		// Show first few and last few samples
-		samplesToShow := 5
-		if len(result.SpeedSamples) <= samplesToShow*2 {
-			// Show all samples if we don't have many
-			for i, speed := range result.SpeedSamples {
-				fmt.Printf("  Sample %d: %.0f addr/s\n", i+1, speed)
-			}
-		} else {
-			// Show first few
-			for i := 0; i < samplesToShow; i++ {
-				fmt.Printf("  Sample %d: %.0f addr/s\n", i+1, result.SpeedSamples[i])
-			}
-
-			fmt.Printf("  ... (%d samples omitted) ...\n", len(result.SpeedSamples)-samplesToShow*2)
-
-			// Show last few
-			for i := len(result.SpeedSamples) - samplesToShow; i < len(result.SpeedSamples); i++ {
-				fmt.Printf("  Sample %d: %.0f addr/s\n", i+1, result.SpeedSamples[i])
-			}
-		}
-
-		// Calculate variance
-		if len(result.SpeedSamples) > 1 {
-			var sum, sumSquares float64
-			for _, speed := range result.SpeedSamples {
-				sum += speed
-				sumSquares += speed * speed
-			}
-
-			mean := sum / float64(len(result.SpeedSamples))
-			variance := (sumSquares - sum*mean) / float64(len(result.SpeedSamples)-1)
-			stdDev := math.Sqrt(variance)
-
-			fmt.Printf("\nSpeed Statistics:\n")
-			fmt.Printf("  Mean: %.0f addr/s\n", mean)
-			fmt.Printf("  Std Dev: %.0f addr/s\n", stdDev)
-			fmt.Printf("  Coefficient of Variation: %.1f%%\n", stdDev/mean*100)
-		}
-	}
-
-	// Performance recommendations
-	fmt.Printf("\nPerformance Analysis:\n")
-
-	if result.ThreadCount > 1 {
-		if result.ScalabilityEfficiency > 0.8 {
-			fmt.Printf("  Excellent multi-threading efficiency\n")
-		} else if result.ScalabilityEfficiency > 0.6 {
-			fmt.Printf("  Good multi-threading efficiency\n")
-		} else {
-			fmt.Printf("  Multi-threading efficiency could be improved\n")
-		}
-
-		if result.ThreadBalanceScore > 0.8 {
-			fmt.Printf("  Well-balanced thread utilization\n")
-		} else {
-			fmt.Printf("  Uneven thread utilization detected\n")
-		}
-	}
-
-	// Speed assessment
-	if result.AverageSpeed > 100000 {
-		fmt.Printf("  Excellent performance (>100k addr/s)\n")
-	} else if result.AverageSpeed > 50000 {
-		fmt.Printf("  Good performance (>50k addr/s)\n")
-	} else if result.AverageSpeed > 10000 {
-		fmt.Printf("  Moderate performance (>10k addr/s)\n")
-	} else {
-		fmt.Printf("  Performance could be improved (<10k addr/s)\n")
 	}
 
 	return nil

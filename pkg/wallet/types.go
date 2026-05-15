@@ -58,20 +58,36 @@ type GenerationStats struct {
 
 // BenchmarkResult holds benchmark statistics
 type BenchmarkResult struct {
-	TotalAttempts         int64           `json:"total_attempts"`
-	TotalDuration         time.Duration   `json:"total_duration"`
-	AverageSpeed          float64         `json:"average_speed"`
-	MinSpeed              float64         `json:"min_speed"`
-	MaxSpeed              float64         `json:"max_speed"`
-	SpeedSamples          []float64       `json:"speed_samples"`
-	DurationSamples       []time.Duration `json:"duration_samples"`
-	SingleThreadSpeed     float64         `json:"single_thread_speed"`
-	ThreadCount           int             `json:"thread_count"`
-	ScalabilityEfficiency float64         `json:"scalability_efficiency"`
-	ThreadBalanceScore    float64         `json:"thread_balance_score"`
-	ThreadUtilization     float64         `json:"thread_utilization"`
-	SpeedupVsSingleThread float64         `json:"speedup_vs_single_thread"`
-	AmdahlsLawLimit       float64         `json:"amdahls_law_limit"`
+	Engine                 string          `json:"engine,omitempty"`
+	RequestedEngine        string          `json:"requested_engine,omitempty"`
+	FallbackReason         string          `json:"fallback_reason,omitempty"`
+	DeviceName             string          `json:"device_name,omitempty"`
+	Network                string          `json:"network,omitempty"`
+	Pattern                string          `json:"pattern,omitempty"`
+	BatchSize              int             `json:"batch_size,omitempty"`
+	IsSynthetic            bool            `json:"synthetic,omitempty"`
+	IsHybrid               bool            `json:"hybrid,omitempty"`
+	Matches                int64           `json:"matches"`
+	TotalAttempts          int64           `json:"total_attempts"`
+	TotalDuration          time.Duration   `json:"total_duration"`
+	AverageSpeed           float64         `json:"average_speed"`
+	MinSpeed               float64         `json:"min_speed"`
+	MaxSpeed               float64         `json:"max_speed"`
+	SpeedSamples           []float64       `json:"speed_samples"`
+	DurationSamples        []time.Duration `json:"duration_samples"`
+	SingleThreadSpeed      float64         `json:"single_thread_speed"`
+	ThreadCount            int             `json:"thread_count"`
+	ScalabilityEfficiency  float64         `json:"scalability_efficiency"`
+	ThreadBalanceScore     float64         `json:"thread_balance_score"`
+	ThreadUtilization      float64         `json:"thread_utilization"`
+	SpeedupVsSingleThread  float64         `json:"speedup_vs_single_thread"`
+	AmdahlsLawLimit        float64         `json:"amdahls_law_limit"`
+	EntropyDuration        time.Duration   `json:"entropy_duration,omitempty"`
+	ScalarBaseMultDuration time.Duration   `json:"scalar_base_mult_duration,omitempty"`
+	HashFormatDuration     time.Duration   `json:"hash_format_duration,omitempty"`
+	MatchDuration          time.Duration   `json:"match_duration,omitempty"`
+	MetalBufferDuration    time.Duration   `json:"metal_buffer_duration,omitempty"`
+	KernelDuration         time.Duration   `json:"kernel_duration,omitempty"`
 }
 
 // IsValid checks if a wallet is valid
