@@ -16,11 +16,17 @@ type Wallet struct {
 
 // GenerationResult represents the result of wallet generation
 type GenerationResult struct {
-	Wallet   *Wallet       `json:"wallet,omitempty"`
-	Attempts int64         `json:"attempts"`
-	Duration time.Duration `json:"duration"`
-	Error    error         `json:"error,omitempty"`
-	WorkerID int           `json:"worker_id,omitempty"`
+	Wallet          *Wallet       `json:"wallet,omitempty"`
+	Attempts        int64         `json:"attempts"`
+	Duration        time.Duration `json:"duration"`
+	Error           error         `json:"error,omitempty"`
+	WorkerID        int           `json:"worker_id,omitempty"`
+	Engine          string        `json:"engine,omitempty"`
+	RequestedEngine string        `json:"requested_engine,omitempty"`
+	FallbackReason  string        `json:"fallback_reason,omitempty"`
+	DeviceName      string        `json:"device_name,omitempty"`
+	BatchSize       int           `json:"batch_size,omitempty"`
+	MetalValidation string        `json:"metal_validation,omitempty"`
 }
 
 // GenerationCriteria defines the criteria for wallet generation

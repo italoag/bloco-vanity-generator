@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +13,10 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	bip32 "github.com/tyler-smith/go-bip32"
 	"github.com/tyler-smith/go-bip39"
-	"golang.org/x/crypto/sha3"
 
 	"bloco-vgen/internal/config"
 	"bloco-vgen/internal/crypto"
+	"bloco-vgen/internal/vanity"
 	"bloco-vgen/pkg/errors"
 	"bloco-vgen/pkg/logging"
 	"bloco-vgen/pkg/wallet"
@@ -552,202 +551,17 @@ func generateMnemonicPrivateKey() (string, *ecdsa.PrivateKey, error) {
 // matchesCriteria checks if an address matches the given prefix and suffix criteria
 // It performs a fast string check first, and only calculates checksum if necessary
 func matchesCriteria(address, prefix, suffix string, isChecksum bool, network string, caseSensitivePattern ...bool) bool {
-	// 1. Fast filter: Check pattern on raw address
-	// We want to avoid expensive checksum calculation if the basic letters don't match
-
-	// Handle 0x prefix for string checking
-	addrWithoutPrefix := address
-	if strings.HasPrefix(address, "0x") {
-		addrWithoutPrefix = address[2:]
-	}
-
-	if isChecksum && (network == "ethereum" || network == "") {
-		checksumAddress := toChecksumAddress(address)
-		if strings.HasPrefix(checksumAddress, "0x") {
-			addrWithoutPrefix = checksumAddress[2:]
-		} else {
-			addrWithoutPrefix = checksumAddress
-		}
-	}
-
-	// Determine matching mode based on network
-	// Ethereum is case-insensitive by default (unless checksum is checked later)
-	// Bitcoin and Solana are case-sensitive (Base58)
-	caseSensitive := network == "bitcoin" || network == "solana"
-	if len(caseSensitivePattern) > 0 && caseSensitivePattern[0] {
-		caseSensitive = true
-	}
-
-	// Check prefix
-	if prefix != "" {
-		if len(addrWithoutPrefix) < len(prefix) {
-			return false
-		}
-		prefixPart := addrWithoutPrefix[:len(prefix)]
-
-		match := false
-		if caseSensitive {
-			match = prefixPart == prefix
-		} else {
-			match = strings.EqualFold(prefixPart, prefix)
-		}
-
-		if !match {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG: Prefix check failed: %q does not start with %q (case-sensitive: %v)\n",
-					prefixPart, prefix, caseSensitive)
-			}
-			return false
-		}
-	}
-
-	// Check suffix
-	if suffix != "" {
-		if len(addrWithoutPrefix) < len(suffix) {
-			return false
-		}
-		suffixPart := addrWithoutPrefix[len(addrWithoutPrefix)-len(suffix):]
-
-		match := false
-		if caseSensitive {
-			match = suffixPart == suffix
-		} else {
-			match = strings.EqualFold(suffixPart, suffix)
-		}
-
-		if !match {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG: Suffix check failed: %q does not end with %q (case-sensitive: %v)\n",
-					suffixPart, suffix, caseSensitive)
-			}
-			return false
-		}
-	}
-
-	// 2. If pattern matches, AND checksum is required, then calculate/verify checksum
-	// Note: For Bitcoin/Solana, case sensitivity is already handled above, so isChecksum mainly implies
-	// strict validation if applicable, but for Ethereum it triggers EIP-55 check.
-	if isChecksum && (prefix != "" || suffix != "") {
-		// Only Ethereum uses EIP-55 mixed-case checksum
-		if network == "ethereum" || network == "" {
-			result := isEIP55Checksum(address, prefix, suffix)
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG: EIP55 validation result: %v\n", result)
-			}
-			return result
-		}
-		// For other networks, we already did case-sensitive check, so we are good
-		return true
-	}
-
-	if os.Getenv("BLOCO_DEBUG") != "" {
-		fmt.Printf("DEBUG: Address validation passed\n")
-	}
-	return true
+	return vanity.MatchesCriteria(address, prefix, suffix, isChecksum, network, caseSensitivePattern...)
 }
 
 // toChecksumAddress converts an address to EIP-55 checksum format
 func toChecksumAddress(address string) string {
-	if !strings.HasPrefix(address, "0x") {
-		address = "0x" + address
-	}
-
-	// Remove 0x prefix for hashing
-	addrWithoutPrefix := strings.ToLower(address[2:])
-	addrBytes := []byte(addrWithoutPrefix)
-
-	// Create Keccak256 hash
-	hasher := sha3.NewLegacyKeccak256()
-	hasher.Write(addrBytes)
-	hash := hasher.Sum(nil)
-
-	// Apply EIP-55 checksum
-	var result strings.Builder
-	result.WriteString("0x")
-
-	for i, char := range addrWithoutPrefix {
-		if char >= '0' && char <= '9' {
-			// Numbers remain unchanged
-			result.WriteByte(byte(char))
-		} else if char >= 'a' && char <= 'f' {
-			// Letters: uppercase if hash bit >= 8, lowercase otherwise
-			hashByte := hash[i/2]
-			var hashBit uint8
-			if i%2 == 0 {
-				hashBit = hashByte >> 4
-			} else {
-				hashBit = hashByte & 0x0f
-			}
-
-			if hashBit >= 8 {
-				result.WriteByte(byte(char - 32)) // Convert to uppercase
-			} else {
-				result.WriteByte(byte(char)) // Keep lowercase
-			}
-		}
-	}
-
-	return result.String()
+	return vanity.ToChecksumAddress(address)
 }
 
 // isEIP55Checksum validates EIP-55 checksum for specific pattern
 func isEIP55Checksum(address, prefix, suffix string) bool {
-	if !strings.HasPrefix(address, "0x") {
-		address = "0x" + address
-	}
-
-	// Generate the correct checksum address
-	checksumAddr := toChecksumAddress(address)
-
-	if os.Getenv("BLOCO_DEBUG") != "" {
-		fmt.Printf("DEBUG EIP55: Original=%s Checksum=%s Prefix=%q Suffix=%q\n",
-			address, checksumAddr, prefix, suffix)
-	}
-
-	// Check if the pattern matches the checksum requirements
-	if prefix != "" {
-		prefixPart := checksumAddr[2 : 2+len(prefix)]
-		if !strings.EqualFold(prefixPart, prefix) {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG EIP55: Prefix failed - got %q expected %q\n", prefixPart, prefix)
-			}
-			return false
-		}
-		if os.Getenv("BLOCO_DEBUG") != "" {
-			fmt.Printf("DEBUG EIP55: Prefix matched - got %q expected %q\n", prefixPart, prefix)
-		}
-		// For EIP-55 checksum validation, we only need to verify that the pattern
-		// matches case-insensitively. The checksum correctness is already ensured
-		// by toChecksumAddress() function.
-	}
-
-	if suffix != "" {
-		suffixStart := len(checksumAddr) - len(suffix)
-		if suffixStart < 2 {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG EIP55: Suffix too long for address\n")
-			}
-			return false
-		}
-		suffixPart := checksumAddr[suffixStart:]
-		if !strings.EqualFold(suffixPart, suffix) {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG EIP55: Suffix failed - got %q expected %q\n", suffixPart, suffix)
-			}
-			return false
-		}
-		if os.Getenv("BLOCO_DEBUG") != "" {
-			fmt.Printf("DEBUG EIP55: Suffix matched - got %q expected %q\n", suffixPart, suffix)
-		}
-		// For EIP-55 checksum validation, we only need to verify that the pattern
-		// matches case-insensitively. The checksum correctness is already ensured
-		// by toChecksumAddress() function.
-	}
-
-	if os.Getenv("BLOCO_DEBUG") != "" {
-		fmt.Printf("DEBUG EIP55: Validation passed\n")
-	}
-	return true
+	return vanity.IsEIP55Checksum(address, prefix, suffix)
 }
 
 // createLogConfigFromAppConfig converts internal config to logging package config

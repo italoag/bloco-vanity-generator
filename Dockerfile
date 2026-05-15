@@ -91,7 +91,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Add labels
 LABEL org.opencontainers.image.title="bloco-vgen" \
-    org.opencontainers.image.description="An Ethereum like Wallet Generator" \
+    org.opencontainers.image.description="An Ethereum like Vanity Generator" \
     org.opencontainers.image.url="https://github.com/italoag/bloco-wallet-generator" \
     org.opencontainers.image.source="https://github.com/italoag/bloco-wallet-generator" \
     org.opencontainers.image.version="${VERSION}" \

@@ -42,6 +42,42 @@ func TestResolveMetalReturnsClearUnavailableError(t *testing.T) {
 	}
 }
 
+func TestResolveGenerationAutoFallsBackForUnsupportedNetwork(t *testing.T) {
+	selection, err := ResolveGeneration(NameAuto, wallet.GenerationCriteria{Network: "bitcoin"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if selection.Resolved != NameCPU {
+		t.Fatalf("expected cpu fallback, got %q", selection.Resolved)
+	}
+	if !strings.Contains(selection.FallbackReason, "ethereum only") {
+		t.Fatalf("unexpected fallback reason: %q", selection.FallbackReason)
+	}
+}
+
+func TestResolveGenerationMetalRejectsUnsupportedMnemonic(t *testing.T) {
+	_, err := ResolveGeneration(NameMetal, wallet.GenerationCriteria{Network: "ethereum", UseMnemonic: true})
+	if err == nil {
+		t.Fatalf("expected unsupported mnemonic error")
+	}
+	if !strings.Contains(err.Error(), "mnemonic") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveGenerationAutoUsesMetalWhenAvailable(t *testing.T) {
+	if !MetalAvailable() {
+		t.Skip("metal backend unavailable in this build")
+	}
+	selection, err := ResolveGeneration(NameAuto, wallet.GenerationCriteria{Network: "ethereum"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if selection.Resolved != NameMetal {
+		t.Fatalf("expected metal engine, got %q", selection.Resolved)
+	}
+}
+
 func TestNormalizeMetalValidationMode(t *testing.T) {
 	tests := []struct {
 		name     string

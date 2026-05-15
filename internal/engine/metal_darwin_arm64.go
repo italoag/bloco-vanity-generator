@@ -395,6 +395,7 @@ import "C"
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"runtime"
@@ -410,6 +411,15 @@ import (
 type MetalEngine struct {
 	deviceName string
 	context    unsafe.Pointer
+}
+
+type metalGenerationCandidate struct {
+	Found      bool
+	PrivateKey [32]byte
+	PublicKey  [65]byte
+	Address    string
+	Stages     stageTotals
+	RawMatches uint32
 }
 
 func MetalAvailable() bool {
@@ -570,6 +580,112 @@ complete:
 	}
 
 	return result, nil
+}
+
+func (e *MetalEngine) GenerateWallet(ctx context.Context, options GenerationOptions, sampleInterval time.Duration, onSample func(GenerationSample)) (*wallet.GenerationResult, error) {
+	if err := ValidateMetalGenerationCriteria(options.Criteria); err != nil {
+		return nil, err
+	}
+	validationMode, err := NormalizeMetalValidationMode(options.MetalValidation)
+	if err != nil {
+		return nil, err
+	}
+	options.MetalValidation = validationMode
+
+	prefixNibbles, err := patternNibbles(options.Criteria.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	suffixNibbles, err := patternNibbles(options.Criteria.Suffix)
+	if err != nil {
+		return nil, err
+	}
+
+	batchSize := options.BatchSize
+	if batchSize <= 0 {
+		batchSize = DefaultMetalBatchSize
+	}
+
+	start := time.Now()
+	lastSample := start
+	lastSampleAttempts := int64(0)
+	totalAttempts := int64(0)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		privateKeys, _, err := generateEthereumPrivateKeyBatch(ctx, batchSize)
+		if err != nil {
+			return nil, err
+		}
+		batchAttempts := int64(len(privateKeys) / 32)
+
+		gpuMatches, _, _, err := runMetalMatch(e.context, privateKeys, prefixNibbles, suffixNibbles)
+		if err != nil {
+			zeroBytes(privateKeys)
+			return nil, err
+		}
+
+		candidate, err := findValidatedMetalGenerationCandidate(privateKeys, prefixNibbles, suffixNibbles, gpuMatches, options.Criteria, validationMode)
+		zeroBytes(privateKeys)
+		if err != nil {
+			return nil, err
+		}
+
+		totalAttempts += batchAttempts
+		now := time.Now()
+		if onSample != nil && (sampleInterval <= 0 || now.Sub(lastSample) >= sampleInterval) {
+			elapsed := now.Sub(lastSample)
+			speed := 0.0
+			if elapsed > 0 {
+				speed = float64(totalAttempts-lastSampleAttempts) / elapsed.Seconds()
+			}
+			onSample(GenerationSample{Attempts: totalAttempts, Speed: speed, Elapsed: now.Sub(start)})
+			lastSample = now
+			lastSampleAttempts = totalAttempts
+		}
+
+		if !candidate.Found {
+			continue
+		}
+
+		privateKeyHex := hex.EncodeToString(candidate.PrivateKey[:])
+		publicKeyHex := hex.EncodeToString(candidate.PublicKey[:])
+		zeroBytes(candidate.PrivateKey[:])
+
+		result := &wallet.GenerationResult{
+			Wallet: &wallet.Wallet{
+				Address:    candidate.Address,
+				PublicKey:  publicKeyHex,
+				PrivateKey: privateKeyHex,
+				Network:    options.Criteria.Network,
+				CreatedAt:  time.Now(),
+			},
+			Attempts:        totalAttempts,
+			Duration:        time.Since(start),
+			Engine:          NameMetal,
+			RequestedEngine: options.RequestedEngine,
+			FallbackReason:  options.FallbackReason,
+			DeviceName:      e.deviceName,
+			BatchSize:       batchSize,
+			MetalValidation: validationMode,
+		}
+		if !MatchesCriteria(result.Wallet.Address, options.Criteria) {
+			return nil, fmt.Errorf("metal generation validation failed for final wallet")
+		}
+		if onSample != nil {
+			speed := 0.0
+			if result.Duration > 0 {
+				speed = float64(result.Attempts) / result.Duration.Seconds()
+			}
+			onSample(GenerationSample{Attempts: result.Attempts, Speed: speed, Elapsed: result.Duration})
+		}
+		return result, nil
+	}
 }
 
 func (e *MetalEngine) buildHybridBenchmarkResult(options BenchmarkOptions, batchSize int, totalAttempts int64, totalMatches int64, totalDuration time.Duration, speedSamples []float64, durationSamples []time.Duration, stages stageTotals, metalBufferDuration time.Duration, kernelDuration time.Duration) *wallet.BenchmarkResult {
@@ -738,6 +854,59 @@ func countPrivateKeyMatches(privateKeys []byte, prefix []byte, suffix []byte) (u
 	}
 
 	return matches, scalarDuration, hashDuration, matchDuration
+}
+
+func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, suffix []byte, gpuMatches uint32, criteria wallet.GenerationCriteria, validationMode string) (metalGenerationCandidate, error) {
+	validationMode, err := NormalizeMetalValidationMode(validationMode)
+	if err != nil {
+		return metalGenerationCandidate{}, err
+	}
+	if validationMode != MetalValidationFull {
+		return metalGenerationCandidate{}, fmt.Errorf("unsupported metal validation mode %q", validationMode)
+	}
+
+	candidate := metalGenerationCandidate{}
+	count := len(privateKeys) / 32
+	hasher := sha3.NewLegacyKeccak256()
+	for i := 0; i < count; i++ {
+		privateKey := privateKeys[i*32 : (i+1)*32]
+		stageStart := time.Now()
+		x, y := ethcrypto.S256().ScalarBaseMult(privateKey)
+		candidate.Stages.Scalar += time.Since(stageStart)
+
+		var publicKey [64]byte
+		x.FillBytes(publicKey[:32])
+		y.FillBytes(publicKey[32:])
+
+		stageStart = time.Now()
+		address := EthereumAddressBytesFromPublicKey(publicKey[:], hasher)
+		candidate.Stages.Hash += time.Since(stageStart)
+
+		stageStart = time.Now()
+		rawMatched := addressMatches(address[:], prefix, suffix)
+		if rawMatched {
+			candidate.RawMatches++
+		}
+		fullMatched := rawMatched && MatchesCriteria(FormatEthereumAddressBytes(address), criteria)
+		candidate.Stages.Match += time.Since(stageStart)
+
+		if fullMatched && !candidate.Found {
+			candidate.Found = true
+			copy(candidate.PrivateKey[:], privateKey)
+			candidate.PublicKey[0] = 4
+			copy(candidate.PublicKey[1:33], publicKey[:32])
+			copy(candidate.PublicKey[33:], publicKey[32:])
+			candidate.Address = FormatEthereumAddressBytes(address)
+			if criteria.IsChecksum {
+				candidate.Address = ChecksumAddress(candidate.Address)
+			}
+		}
+	}
+
+	if gpuMatches != candidate.RawMatches {
+		return candidate, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, candidate.RawMatches)
+	}
+	return candidate, nil
 }
 
 func runMetalMatch(context unsafe.Pointer, privateKeys []byte, prefix []byte, suffix []byte) (uint32, time.Duration, time.Duration, error) {

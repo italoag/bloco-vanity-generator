@@ -3,12 +3,16 @@
 package engine
 
 import (
+	"context"
 	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/sha3"
+
+	"bloco-vgen/pkg/wallet"
 )
 
 func TestMetalKernelDerivesEthereumAddressFromPrivateKeyWhenAvailable(t *testing.T) {
@@ -115,5 +119,53 @@ func TestMetalRunMatchRejectsInvalidPrivateKeyRange(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "outside secp256k1 range") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMetalGenerateWalletWhenAvailable(t *testing.T) {
+	if !MetalAvailable() {
+		t.Skip("metal backend unavailable in this build")
+	}
+
+	generationEngine, err := NewGenerationEngine(NameMetal)
+	if err != nil {
+		t.Fatalf("expected metal generation engine, got %v", err)
+	}
+	metalEngine := generationEngine.(*MetalEngine)
+	defer metalEngine.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := metalEngine.GenerateWallet(ctx, GenerationOptions{
+		BatchSize:       2,
+		ThreadCount:     1,
+		Network:         "ethereum",
+		RequestedEngine: NameMetal,
+		MetalValidation: MetalValidationFull,
+		Criteria: wallet.GenerationCriteria{
+			Network: "ethereum",
+		},
+	}, time.Hour, nil)
+	if err != nil {
+		t.Fatalf("expected metal wallet generation, got %v", err)
+	}
+	if result.Engine != NameMetal {
+		t.Fatalf("expected metal result, got %q", result.Engine)
+	}
+	if result.DeviceName == "" {
+		t.Fatalf("expected metal device name")
+	}
+	if result.BatchSize != 2 {
+		t.Fatalf("expected batch size 2, got %d", result.BatchSize)
+	}
+	if result.MetalValidation != MetalValidationFull {
+		t.Fatalf("expected full validation, got %q", result.MetalValidation)
+	}
+	if result.Wallet == nil || result.Wallet.PrivateKey == "" || result.Wallet.PublicKey == "" || result.Wallet.Address == "" {
+		t.Fatalf("expected complete wallet result: %#v", result)
+	}
+	if !MatchesCriteria(result.Wallet.Address, wallet.GenerationCriteria{Network: "ethereum"}) {
+		t.Fatalf("expected generated address to match criteria")
 	}
 }

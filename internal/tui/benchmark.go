@@ -37,6 +37,15 @@ type BenchmarkModel struct {
 	quitting       bool
 	lastUpdate     time.Time
 	transitionTime time.Time
+	engineInfo     EngineInfo
+}
+
+// WithEngineInfo returns a copy of the model with engine diagnostics attached.
+// The same fields are printed in the text benchmark path; the TUI renders them
+// in both the running and results views.
+func (m BenchmarkModel) WithEngineInfo(info EngineInfo) BenchmarkModel {
+	m.engineInfo = info
+	return m
 }
 
 // BenchmarkUpdateMsg represents a benchmark update message
@@ -204,6 +213,12 @@ func (m BenchmarkModel) renderProgressView() string {
 	header := m.styleManager.FormatHeader("Benchmark Running")
 	b.WriteString(header + "\n\n")
 
+	// Engine diagnostics (matches the text-mode benchmark header)
+	if block := m.renderEngineInfoBlock(pad); block != "" {
+		b.WriteString(block)
+		b.WriteString("\n")
+	}
+
 	// Progress bar
 	if m.progressMsg.Attempts > 0 {
 		// Calculate progress percentage based on attempts vs estimated total
@@ -311,6 +326,12 @@ func (m BenchmarkModel) renderResultsView() string {
 	header := m.styleManager.FormatHeader("Benchmark Results")
 	b.WriteString(header + "\n\n")
 
+	// Engine diagnostics (matches the text-mode benchmark header)
+	if block := m.renderEngineInfoBlock(pad); block != "" {
+		b.WriteString(block)
+		b.WriteString("\n")
+	}
+
 	// Results summary
 	if m.results != nil {
 		summaryStyle := lipgloss.NewStyle().
@@ -344,6 +365,28 @@ func (m BenchmarkModel) renderResultsView() string {
 	helpText := helpStyle("↑/↓: Navigate • q: Quit • Ctrl+C: Exit")
 	b.WriteString(helpText)
 
+	return b.String()
+}
+
+// renderEngineInfoBlock renders the engine diagnostics block for the benchmark
+// views. It mirrors the fields emitted in runBenchmarkText so users see the
+// same engine, device and batch context regardless of TUI vs text mode.
+func (m BenchmarkModel) renderEngineInfoBlock(pad string) string {
+	if m.engineInfo.IsZero() {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(pad)
+	b.WriteString(m.styleManager.FormatSubtitle("Engine"))
+	b.WriteString("\n")
+
+	rows := engineInfoRows(m.engineInfo)
+	for _, row := range rows {
+		b.WriteString(pad)
+		b.WriteString(m.styleManager.FormatKeyValue(row.label, row.value))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

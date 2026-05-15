@@ -780,6 +780,25 @@ func (app *Application) writeBenchmarkOutput(result *wallet.BenchmarkResult, opt
 	return err
 }
 
+// newBenchmarkTUIEngineInfo builds the engine diagnostics block consumed by
+// the benchmark TUI. It mirrors the fields printed by runBenchmarkText so both
+// modes expose the same engine, device, batch and validation context.
+func newBenchmarkTUIEngineInfo(options benchmarkOptions, threadCount int) tui.EngineInfo {
+	info := tui.EngineInfo{
+		Engine:          options.Engine,
+		RequestedEngine: options.RequestedEngine,
+		FallbackReason:  options.FallbackReason,
+		ThreadCount:     threadCount,
+		Network:         options.Network,
+		BatchSize:       options.BatchSize,
+	}
+	if options.Engine == engine.NameMetal {
+		info.DeviceName = engine.MetalDeviceName()
+		info.MetalValidation = options.MetalValidation
+	}
+	return info
+}
+
 func sendBenchmarkTUISample(program *tea.Program, criteria wallet.GenerationCriteria, sample benchmarkSample) {
 	avgSpeed := sample.Speed
 	if sample.Result != nil {

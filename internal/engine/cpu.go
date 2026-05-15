@@ -7,7 +7,6 @@ import (
 	"hash"
 	"math/big"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +14,7 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/sha3"
 
+	"bloco-vgen/internal/vanity"
 	"bloco-vgen/pkg/wallet"
 )
 
@@ -280,73 +280,11 @@ func FormatEthereumAddressBytes(addressBytes [20]byte) string {
 }
 
 func MatchesCriteria(address string, criteria wallet.GenerationCriteria) bool {
-	addr := strings.TrimPrefix(address, "0x")
-	if criteria.IsChecksum {
-		addr = strings.TrimPrefix(ChecksumAddress(address), "0x")
-	}
-
-	caseSensitive := criteria.CaseSensitive
-	if criteria.Prefix != "" {
-		if len(addr) < len(criteria.Prefix) {
-			return false
-		}
-		prefix := addr[:len(criteria.Prefix)]
-		if caseSensitive {
-			if prefix != criteria.Prefix {
-				return false
-			}
-		} else if !strings.EqualFold(prefix, criteria.Prefix) {
-			return false
-		}
-	}
-
-	if criteria.Suffix != "" {
-		if len(addr) < len(criteria.Suffix) {
-			return false
-		}
-		suffix := addr[len(addr)-len(criteria.Suffix):]
-		if caseSensitive {
-			if suffix != criteria.Suffix {
-				return false
-			}
-		} else if !strings.EqualFold(suffix, criteria.Suffix) {
-			return false
-		}
-	}
-
-	return true
+	return vanity.MatchesGenerationCriteria(address, criteria)
 }
 
 func ChecksumAddress(address string) string {
-	addr := strings.TrimPrefix(address, "0x")
-	addr = strings.ToLower(addr)
-
-	hasher := sha3.NewLegacyKeccak256()
-	hasher.Write([]byte(addr))
-	hashBytes := hasher.Sum(nil)
-
-	var result strings.Builder
-	result.Grow(42)
-	result.WriteString("0x")
-	for i, char := range addr {
-		if char >= '0' && char <= '9' {
-			result.WriteByte(byte(char))
-			continue
-		}
-		if char >= 'a' && char <= 'f' {
-			hashByte := hashBytes[i/2]
-			hashNibble := hashByte >> 4
-			if i%2 == 1 {
-				hashNibble = hashByte & 0x0f
-			}
-			if hashNibble >= 8 {
-				result.WriteByte(byte(char - 32))
-			} else {
-				result.WriteByte(byte(char))
-			}
-		}
-	}
-	return result.String()
+	return vanity.ToChecksumAddress(address)
 }
 
 func collectResult(options BenchmarkOptions, workerCount int, totalAttempts int64, totalMatches int64, totalDuration time.Duration, speedSamples []float64, durationSamples []time.Duration, workerTotalsCh <-chan workerTotals) *wallet.BenchmarkResult {

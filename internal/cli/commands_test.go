@@ -55,6 +55,85 @@ func TestGetGenerationCriteriaRejectsCaseSensitiveWithoutChecksum(t *testing.T) 
 	}
 }
 
+func TestGetGenerationEngineOptionsReadsEnvironment(t *testing.T) {
+	t.Setenv(envBlocoEngine, engine.NameCPU)
+	t.Setenv(envBlocoGPUBatchSize, "7")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := app.rootCmd
+	if err := cmd.ParseFlags([]string{"--prefix", "ab"}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+	criteria, err := app.getGenerationCriteria(cmd)
+	if err != nil {
+		t.Fatalf("expected criteria, got %v", err)
+	}
+
+	selection, options, err := app.getGenerationEngineOptions(cmd, criteria)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if selection.Requested != engine.NameCPU {
+		t.Fatalf("expected env requested engine cpu, got %q", selection.Requested)
+	}
+	if selection.Resolved != engine.NameCPU {
+		t.Fatalf("expected cpu engine, got %q", selection.Resolved)
+	}
+	if options.BatchSize != 7 {
+		t.Fatalf("expected env batch size 7, got %d", options.BatchSize)
+	}
+}
+
+func TestGetGenerationEngineOptionsFlagOverridesEnvironment(t *testing.T) {
+	t.Setenv(envBlocoEngine, engine.NameCPU)
+	t.Setenv(envBlocoGPUBatchSize, "7")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := app.rootCmd
+	if err := cmd.ParseFlags([]string{"--engine", "auto", "--gpu-batch-size", "3", "--prefix", "ab"}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+	criteria, err := app.getGenerationCriteria(cmd)
+	if err != nil {
+		t.Fatalf("expected criteria, got %v", err)
+	}
+
+	selection, options, err := app.getGenerationEngineOptions(cmd, criteria)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if selection.Requested != engine.NameAuto {
+		t.Fatalf("expected flag requested engine auto, got %q", selection.Requested)
+	}
+	if options.BatchSize != 3 {
+		t.Fatalf("expected flag batch size 3, got %d", options.BatchSize)
+	}
+}
+
+func TestGetGenerationEngineOptionsRejectsDisabledCPUVerificationForMetal(t *testing.T) {
+	t.Setenv(envBlocoGPUVerifyCPU, "false")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := app.rootCmd
+	if err := cmd.ParseFlags([]string{"--engine", "metal", "--prefix", "ab"}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+	criteria, err := app.getGenerationCriteria(cmd)
+	if err != nil {
+		t.Fatalf("expected criteria, got %v", err)
+	}
+
+	_, _, err = app.getGenerationEngineOptions(cmd, criteria)
+	if engine.MetalAvailable() {
+		if err == nil {
+			t.Fatalf("expected disabled CPU verification error")
+		}
+		if !strings.Contains(err.Error(), "Phase 4 requires full CPU verification") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
+
 func TestGetBenchmarkOptionsResolvesAutoToCPU(t *testing.T) {
 	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
 	cmd := benchmarkCommandForTest(t, app)
@@ -441,4 +520,97 @@ func benchmarkCommandForTest(t *testing.T, app *Application) *cobra.Command {
 
 	t.Fatalf("benchmark command not found")
 	return nil
+}
+
+func TestNewTUIEngineInfoCPU(t *testing.T) {
+	selection := engine.Selection{Requested: engine.NameCPU, Resolved: engine.NameCPU}
+	options := engine.GenerationOptions{
+		Network:         "ethereum",
+		BatchSize:       1024,
+		MetalValidation: engine.MetalValidationFull,
+	}
+
+	info := newTUIEngineInfo(selection, options, 4)
+	if info.Engine != engine.NameCPU {
+		t.Fatalf("expected cpu engine, got %q", info.Engine)
+	}
+	if info.ThreadCount != 4 {
+		t.Fatalf("expected thread count 4, got %d", info.ThreadCount)
+	}
+	if info.Network != "ethereum" {
+		t.Fatalf("expected network ethereum, got %q", info.Network)
+	}
+	if info.DeviceName != "" || info.BatchSize != 0 || info.MetalValidation != "" {
+		t.Fatalf("cpu engine should not carry metal-specific fields, got %+v", info)
+	}
+}
+
+func TestNewTUIEngineInfoMetal(t *testing.T) {
+	if !engine.MetalAvailable() {
+		t.Skip("metal backend unavailable in this build")
+	}
+
+	selection := engine.Selection{Requested: engine.NameMetal, Resolved: engine.NameMetal}
+	options := engine.GenerationOptions{
+		Network:         "ethereum",
+		BatchSize:       2048,
+		MetalValidation: engine.MetalValidationFull,
+	}
+
+	info := newTUIEngineInfo(selection, options, 8)
+	if info.Engine != engine.NameMetal {
+		t.Fatalf("expected metal engine, got %q", info.Engine)
+	}
+	if info.BatchSize != 2048 {
+		t.Fatalf("expected batch size 2048, got %d", info.BatchSize)
+	}
+	if info.MetalValidation != engine.MetalValidationFull {
+		t.Fatalf("expected full validation, got %q", info.MetalValidation)
+	}
+	if info.DeviceName == "" {
+		t.Fatalf("expected metal device name, got empty string")
+	}
+}
+
+func TestNewBenchmarkTUIEngineInfoCPU(t *testing.T) {
+	options := benchmarkOptions{
+		Engine:          engine.NameCPU,
+		RequestedEngine: engine.NameCPU,
+		BatchSize:       5000,
+		Network:         "ethereum",
+		MetalValidation: engine.MetalValidationFull,
+	}
+
+	info := newBenchmarkTUIEngineInfo(options, 6)
+	if info.Engine != engine.NameCPU {
+		t.Fatalf("expected cpu engine, got %q", info.Engine)
+	}
+	if info.BatchSize != 5000 {
+		t.Fatalf("expected batch size 5000, got %d", info.BatchSize)
+	}
+	if info.ThreadCount != 6 {
+		t.Fatalf("expected thread count 6, got %d", info.ThreadCount)
+	}
+	if info.DeviceName != "" || info.MetalValidation != "" {
+		t.Fatalf("cpu benchmark info should not carry metal-only fields, got %+v", info)
+	}
+}
+
+func TestWillUseTUIRespectsQuietAndProgress(t *testing.T) {
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+
+	if app.willUseTUI(false) {
+		t.Fatalf("willUseTUI should be false when showProgress is false")
+	}
+
+	app.config.CLI.QuietMode = true
+	if app.willUseTUI(true) {
+		t.Fatalf("willUseTUI should be false when quiet mode is enabled")
+	}
+
+	app = NewApplication(config.DefaultConfig(), "test", "test", "test")
+	app.config.TUI.Enabled = false
+	if app.willUseTUI(true) {
+		t.Fatalf("willUseTUI should be false when TUI is disabled in config")
+	}
 }

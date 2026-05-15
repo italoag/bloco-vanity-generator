@@ -1,4 +1,4 @@
-# Bloco Wallet Generator Makefile
+# Bloco Vanity Generator Makefile
 
 # Variables
 BINARY_NAME=bloco-vgen

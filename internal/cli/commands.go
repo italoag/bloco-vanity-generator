@@ -90,6 +90,7 @@ func (app *Application) addGlobalFlags() {
 	// Performance parameters
 	flags.IntP("threads", "t", 0, "Number of worker threads (0 = auto-detect)")
 	flags.String("engine", "auto", "Generation engine (auto, cpu, metal)")
+	flags.Int("gpu-batch-size", engine.DefaultMetalBatchSize, "Number of candidates processed per Metal generation batch")
 	flags.Bool("progress", false, "Show progress information")
 	flags.Bool("tui", true, "Use terminal UI (when available)")
 
@@ -118,8 +119,11 @@ func (app *Application) addGlobalFlags() {
 }
 
 // createWorkerPool creates an optimized worker pool with secure logging
-func (app *Application) createWorkerPool(poolManager *crypto.PoolManager, validator *validation.AddressValidator, network string) (worker.WorkerPool, error) {
-	// Create worker pool with configuration that includes logging settings
+func (app *Application) createWorkerPool(poolManager *crypto.PoolManager, validator *validation.AddressValidator, network string, selection engine.Selection, options engine.GenerationOptions) (worker.WorkerPool, error) {
+	if selection.Resolved == engine.NameMetal {
+		return worker.NewMetalPoolWithConfig(app.config.Worker.ThreadCount, app.config, options)
+	}
+
 	pool := worker.NewPoolWithConfig(app.config.Worker.ThreadCount, app.config, network)
 	return pool, nil
 }
@@ -134,16 +138,6 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 			"parse_flags", "failed to parse command flags")
 	}
 
-	engineSelection, err := resolveCommandEngine(cmd)
-	if err != nil {
-		return errors.WrapError(err, errors.ErrorTypeConfiguration,
-			"resolve_engine", "failed to resolve generation engine")
-	}
-	if engineSelection.Resolved != engine.NameCPU {
-		return errors.NewConfigurationError("resolve_engine",
-			"metal generation engine is benchmark-only; use benchmark --engine metal for validation")
-	}
-
 	// Get generation parameters
 	criteria, err := app.getGenerationCriteria(cmd)
 	if err != nil {
@@ -153,6 +147,11 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 
 	count, _ := cmd.Flags().GetInt("count")
 	showProgress, _ := cmd.Flags().GetBool("progress")
+	engineSelection, generationOptions, err := app.getGenerationEngineOptions(cmd, criteria)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"resolve_engine", "failed to resolve generation engine")
+	}
 
 	// Create crypto components
 	poolManager := crypto.NewPoolManager(crypto.DefaultPoolConfig())
@@ -160,7 +159,7 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 	validator := validation.NewAddressValidator(checksumValidator)
 
 	// Create optimized worker pool using ants
-	workerPool, err := app.createWorkerPool(poolManager, validator, criteria.Network)
+	workerPool, err := app.createWorkerPool(poolManager, validator, criteria.Network, engineSelection, generationOptions)
 	if err != nil {
 		return err
 	}
@@ -177,12 +176,50 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 		}
 	}()
 
+	// Build engine diagnostics once. The TUI path renders this block inside
+	// the interface, the text path keeps the original printf so both modes
+	// expose the same engine, device and batch context before generation.
+	engineInfo := newTUIEngineInfo(engineSelection, generationOptions, app.config.Worker.ThreadCount)
+	if !app.willUseTUI(showProgress) {
+		app.displayGenerationEngineDiagnostics(engineSelection, generationOptions, showProgress)
+	}
+
 	// Generate wallets
 	if count == 1 {
-		return app.generateSingleWallet(ctx, workerPool, criteria, showProgress)
+		return app.generateSingleWallet(ctx, workerPool, criteria, showProgress, engineInfo)
 	} else {
-		return app.generateMultipleWallets(ctx, workerPool, criteria, count, showProgress)
+		return app.generateMultipleWallets(ctx, workerPool, criteria, count, showProgress, engineInfo)
 	}
+}
+
+// willUseTUI mirrors the decision used by generateSingleWallet and
+// generateMultipleWallets so callers can suppress duplicate text-mode
+// diagnostics when the TUI will render the same information inline.
+func (app *Application) willUseTUI(showProgress bool) bool {
+	if !showProgress || app.config.CLI.QuietMode || !app.config.TUI.Enabled {
+		return false
+	}
+	return tui.NewTUIManager().ShouldUseTUI()
+}
+
+// newTUIEngineInfo builds the engine diagnostics block used by the TUI from
+// the same data displayed in text mode by displayGenerationEngineDiagnostics.
+// Metal-only fields (device, batch, validation) are populated only when the
+// resolved engine is Metal so the TUI matches the text behavior.
+func newTUIEngineInfo(selection engine.Selection, options engine.GenerationOptions, threadCount int) tui.EngineInfo {
+	info := tui.EngineInfo{
+		Engine:          selection.Resolved,
+		RequestedEngine: selection.Requested,
+		FallbackReason:  selection.FallbackReason,
+		ThreadCount:     threadCount,
+		Network:         options.Network,
+	}
+	if selection.Resolved == engine.NameMetal {
+		info.DeviceName = engine.MetalDeviceName()
+		info.BatchSize = options.BatchSize
+		info.MetalValidation = options.MetalValidation
+	}
+	return info
 }
 
 // generateSingleWallet generates a single wallet with progress tracking
@@ -191,6 +228,7 @@ func (app *Application) generateSingleWallet(
 	workerPool worker.WorkerPool,
 	criteria wallet.GenerationCriteria,
 	showProgress bool,
+	engineInfo tui.EngineInfo,
 ) error {
 	// Check if TUI should be used for progress
 	tuiManager := tui.NewTUIManager()
@@ -203,7 +241,7 @@ func (app *Application) generateSingleWallet(
 	}
 
 	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.generateSingleWalletTUI(ctx, workerPool, criteria)
+		return app.generateSingleWalletTUI(ctx, workerPool, criteria, engineInfo)
 	}
 
 	// Fallback to text mode
@@ -215,6 +253,7 @@ func (app *Application) generateSingleWalletTUI(
 	ctx context.Context,
 	workerPool worker.WorkerPool,
 	criteria wallet.GenerationCriteria,
+	engineInfo tui.EngineInfo,
 ) error {
 	// Create TUI statistics
 	difficulty := calculateDifficulty(criteria)
@@ -237,9 +276,10 @@ func (app *Application) generateSingleWalletTUI(
 	statsCollector := workerPool.GetStatsCollector()
 	statsAdapter := &StatsManagerAdapter{statsCollector}
 
-	// Create TUI progress model
+	// Create TUI progress model with engine diagnostics preloaded so the
+	// running view shows the same engine, device and batch info as text mode.
 	tuiManager := tui.NewTUIManager()
-	progressModel := tuiManager.CreateProgressModel(tuiStats, statsAdapter)
+	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
 	program := tea.NewProgram(progressModel)
@@ -435,6 +475,7 @@ func (app *Application) generateMultipleWallets(
 	criteria wallet.GenerationCriteria,
 	count int,
 	showProgress bool,
+	engineInfo tui.EngineInfo,
 ) error {
 	// Check if TUI should be used for multiple wallets
 	tuiManager := tui.NewTUIManager()
@@ -447,7 +488,7 @@ func (app *Application) generateMultipleWallets(
 	}
 
 	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.generateMultipleWalletsTUI(ctx, workerPool, criteria, count)
+		return app.generateMultipleWalletsTUI(ctx, workerPool, criteria, count, engineInfo)
 	}
 
 	// Fallback to text mode for multiple wallets
@@ -460,6 +501,7 @@ func (app *Application) generateMultipleWalletsTUI(
 	workerPool worker.WorkerPool,
 	criteria wallet.GenerationCriteria,
 	count int,
+	engineInfo tui.EngineInfo,
 ) error {
 	// Create TUI statistics
 	difficulty := calculateDifficulty(criteria)
@@ -482,9 +524,10 @@ func (app *Application) generateMultipleWalletsTUI(
 	statsCollector := workerPool.GetStatsCollector()
 	statsAdapter := &StatsManagerAdapter{statsCollector}
 
-	// Create TUI progress model
+	// Create TUI progress model with engine diagnostics preloaded so the
+	// running view shows the same engine, device and batch info as text mode.
 	tuiManager := tui.NewTUIManager()
-	progressModel := tuiManager.CreateProgressModel(tuiStats, statsAdapter)
+	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
 	program := tea.NewProgram(progressModel)
@@ -893,9 +936,11 @@ func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 
 // runBenchmarkTUI runs benchmark with TUI interface
 func (app *Application) runBenchmarkTUI(ctx context.Context, options benchmarkOptions) error {
-	// Create TUI benchmark model
+	// Create TUI benchmark model preloaded with engine diagnostics so the
+	// running and results views show the same engine, device and batch info
+	// emitted by runBenchmarkText.
 	tuiManager := tui.NewTUIManager()
-	benchmarkModel := tuiManager.CreateBenchmarkModel()
+	benchmarkModel := tuiManager.CreateBenchmarkModelWithEngine(newBenchmarkTUIEngineInfo(options, app.config.Worker.ThreadCount))
 
 	// Create TUI program
 	program := tea.NewProgram(benchmarkModel, tea.WithAltScreen())
@@ -970,7 +1015,7 @@ func (app *Application) createVersionCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Show version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Bloco-ETH %s\n", app.version)
+			fmt.Printf("Bloco Vanity Generator %s\n", app.version)
 			fmt.Printf("Git Commit: %s\n", app.gitCommit)
 			fmt.Printf("Build Time: %s\n", app.buildTime)
 		},
@@ -1383,6 +1428,58 @@ func (app *Application) getGenerationCriteria(cmd *cobra.Command) (wallet.Genera
 	return criteria, criteria.Validate()
 }
 
+func (app *Application) getGenerationEngineOptions(cmd *cobra.Command, criteria wallet.GenerationCriteria) (engine.Selection, engine.GenerationOptions, error) {
+	requestedEngine := flagStringOrEnv(cmd, "engine", envBlocoEngine)
+	selection, err := engine.ResolveGeneration(requestedEngine, criteria)
+	if err != nil {
+		return engine.Selection{}, engine.GenerationOptions{}, err
+	}
+
+	batchSize, err := flagIntOrEnv(cmd, "gpu-batch-size", envBlocoGPUBatchSize)
+	if err != nil {
+		return engine.Selection{}, engine.GenerationOptions{}, err
+	}
+	if batchSize <= 0 {
+		return engine.Selection{}, engine.GenerationOptions{}, fmt.Errorf("gpu-batch-size must be positive, got %d", batchSize)
+	}
+
+	metalValidation, err := resolveMetalValidationConfig(cmd, selection.Resolved, engine.MetalValidationFull)
+	if err != nil {
+		return engine.Selection{}, engine.GenerationOptions{}, err
+	}
+
+	return selection, engine.GenerationOptions{
+		BatchSize:       batchSize,
+		ThreadCount:     app.config.Worker.ThreadCount,
+		Network:         criteria.Network,
+		Criteria:        criteria,
+		RequestedEngine: selection.Requested,
+		FallbackReason:  selection.FallbackReason,
+		MetalValidation: metalValidation,
+	}, nil
+}
+
+func (app *Application) displayGenerationEngineDiagnostics(selection engine.Selection, options engine.GenerationOptions, showProgress bool) {
+	if (!showProgress && !app.config.CLI.VerboseOutput) || app.config.CLI.QuietMode {
+		return
+	}
+	fmt.Printf("Engine: %s\n", selection.Resolved)
+	if selection.Requested != "" && selection.Requested != selection.Resolved {
+		fmt.Printf("Requested Engine: %s\n", selection.Requested)
+	}
+	if selection.FallbackReason != "" {
+		fmt.Printf("Fallback: %s\n", selection.FallbackReason)
+	}
+	if selection.Resolved == engine.NameMetal {
+		if deviceName := engine.MetalDeviceName(); deviceName != "" {
+			fmt.Printf("Metal Device: %s\n", deviceName)
+		}
+		fmt.Printf("GPU Batch Size: %d\n", options.BatchSize)
+		fmt.Printf("Metal Validation: %s\n", options.MetalValidation)
+	}
+	fmt.Printf("\n")
+}
+
 // Helper functions using utils package
 func calculateDifficulty(criteria wallet.GenerationCriteria) float64 {
 	return utils.CalculateDifficulty(criteria.Prefix, criteria.Suffix, criteria.IsChecksum)
@@ -1417,6 +1514,15 @@ func (app *Application) displayWalletResult(result *wallet.GenerationResult, sho
 	}
 	fmt.Printf("Attempts: %s\n", formatLargeNumber(result.Attempts))
 	fmt.Printf("Duration: %v\n", result.Duration)
+	if (showProgress || app.config.CLI.VerboseOutput) && result.Engine != "" {
+		fmt.Printf("Engine: %s\n", result.Engine)
+		if result.DeviceName != "" {
+			fmt.Printf("Device: %s\n", result.DeviceName)
+		}
+		if result.BatchSize > 0 {
+			fmt.Printf("Batch Size: %d\n", result.BatchSize)
+		}
+	}
 
 	// Generate keystore if enabled
 	if app.config.KeyStore.Enabled {
@@ -1460,6 +1566,15 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 
 		fmt.Printf("  Attempts: %s\n", formatLargeNumber(result.Attempts))
 		fmt.Printf("  Duration: %s\n", formatDuration(result.Duration))
+		if (showProgress || app.config.CLI.VerboseOutput) && result.Engine != "" {
+			fmt.Printf("  Engine: %s\n", result.Engine)
+			if result.DeviceName != "" {
+				fmt.Printf("  Device: %s\n", result.DeviceName)
+			}
+			if result.BatchSize > 0 {
+				fmt.Printf("  Batch Size: %d\n", result.BatchSize)
+			}
+		}
 
 		if result.WorkerID > 0 {
 			fmt.Printf("  Worker: #%d\n", result.WorkerID)
