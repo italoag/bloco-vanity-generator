@@ -16,6 +16,10 @@ const (
 	NameMetal = "metal"
 )
 
+const (
+	MetalValidationFull = "full"
+)
+
 type Selection struct {
 	Requested      string
 	Resolved       string
@@ -31,6 +35,7 @@ type BenchmarkOptions struct {
 	Criteria        wallet.GenerationCriteria
 	RequestedEngine string
 	FallbackReason  string
+	MetalValidation string
 }
 
 type Sample struct {
@@ -82,4 +87,16 @@ func NewBenchmarkEngine(name string) (BenchmarkEngine, error) {
 	default:
 		return nil, fmt.Errorf("unsupported resolved engine %q", name)
 	}
+}
+
+func NormalizeMetalValidationMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return MetalValidationFull, nil
+	}
+
+	if mode == MetalValidationFull {
+		return mode, nil
+	}
+	return "", fmt.Errorf("unsupported metal validation mode %q (Phase 4 requires full CPU verification)", mode)
 }

@@ -95,3 +95,25 @@ func TestMetalPrivateKeyBatchCountValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestMetalRunMatchRejectsInvalidPrivateKeyRange(t *testing.T) {
+	if !MetalAvailable() {
+		t.Skip("metal backend unavailable in this build")
+	}
+
+	benchmarkEngine, err := NewMetalEngine()
+	if err != nil {
+		t.Fatalf("expected metal engine, got %v", err)
+	}
+	metalEngine := benchmarkEngine.(*MetalEngine)
+	defer metalEngine.Close()
+
+	invalidPrivateKey := make([]byte, 32)
+	_, _, _, err = runMetalMatch(metalEngine.context, invalidPrivateKey, nil, nil)
+	if err == nil {
+		t.Fatalf("expected invalid private key range error")
+	}
+	if !strings.Contains(err.Error(), "outside secp256k1 range") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

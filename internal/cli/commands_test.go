@@ -67,6 +67,7 @@ func TestGetBenchmarkOptionsResolvesAutoToCPU(t *testing.T) {
 		"--network", "ethereum",
 		"--prefix", "ab",
 		"--format", "json",
+		"--metal-validation", "full",
 		"--tui=false",
 	}); err != nil {
 		t.Fatalf("failed to parse flags: %v", err)
@@ -93,8 +94,245 @@ func TestGetBenchmarkOptionsResolvesAutoToCPU(t *testing.T) {
 		t.Fatalf("expected json format, got %q", options.Format)
 	}
 
+	if options.MetalValidation != engine.MetalValidationFull {
+		t.Fatalf("expected metal validation full, got %q", options.MetalValidation)
+	}
+
 	if options.UseTUI {
 		t.Fatalf("expected TUI disabled")
+	}
+}
+
+func TestGetBenchmarkOptionsReadsPhase5Environment(t *testing.T) {
+	t.Setenv(envBlocoEngine, engine.NameCPU)
+	t.Setenv(envBlocoGPUBatchSize, "7")
+	t.Setenv(envBlocoGPUVerifyCPU, "true")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	if err := cmd.ParseFlags([]string{
+		"--attempts", "10",
+		"--duration", "1s",
+		"--network", "ethereum",
+		"--format", "json",
+		"--tui=false",
+	}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+
+	options, err := app.getBenchmarkOptions(cmd)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if options.RequestedEngine != engine.NameCPU {
+		t.Fatalf("expected env engine cpu, got %q", options.RequestedEngine)
+	}
+	if options.BatchSize != 7 {
+		t.Fatalf("expected env batch size 7, got %d", options.BatchSize)
+	}
+	if options.MetalValidation != engine.MetalValidationFull {
+		t.Fatalf("expected safe full validation, got %q", options.MetalValidation)
+	}
+}
+
+func TestGetBenchmarkOptionsFlagOverridesPhase5Environment(t *testing.T) {
+	t.Setenv(envBlocoEngine, engine.NameCPU)
+	t.Setenv(envBlocoGPUBatchSize, "7")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	if err := cmd.ParseFlags([]string{
+		"--attempts", "10",
+		"--duration", "1s",
+		"--engine", "auto",
+		"--batch-size", "3",
+		"--network", "ethereum",
+		"--format", "json",
+		"--tui=false",
+	}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+
+	options, err := app.getBenchmarkOptions(cmd)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if options.RequestedEngine != engine.NameAuto {
+		t.Fatalf("expected flag engine auto, got %q", options.RequestedEngine)
+	}
+	if options.BatchSize != 3 {
+		t.Fatalf("expected flag batch size 3, got %d", options.BatchSize)
+	}
+}
+
+func TestResolveMetalValidationConfigRejectsDisabledCPUVerificationForMetal(t *testing.T) {
+	t.Setenv(envBlocoGPUVerifyCPU, "false")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	_, err := resolveMetalValidationConfig(cmd, engine.NameMetal, engine.MetalValidationFull)
+	if err == nil {
+		t.Fatalf("expected disabled CPU verification error")
+	}
+	if !strings.Contains(err.Error(), "Phase 4 requires full CPU verification") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetBenchmarkOptionsRejectsInvalidPhase5Environment(t *testing.T) {
+	t.Setenv(envBlocoGPUBatchSize, "large")
+
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	if err := cmd.ParseFlags([]string{"--attempts", "10", "--duration", "1s"}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+
+	_, err := app.getBenchmarkOptions(cmd)
+	if err == nil {
+		t.Fatalf("expected invalid env error")
+	}
+	if !strings.Contains(err.Error(), envBlocoGPUBatchSize) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetBenchmarkOptionsReadsPhase6ComparisonFlags(t *testing.T) {
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	if err := cmd.ParseFlags([]string{
+		"--compare",
+		"--compare-patterns", "ab,abcd",
+		"--compare-batch-sizes", "2,4",
+		"--compare-checksums", "off,on",
+		"--attempts", "4",
+		"--duration", "1s",
+		"--format", "json",
+		"--tui=false",
+	}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+
+	options, err := app.getBenchmarkOptions(cmd)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !options.Compare {
+		t.Fatalf("expected compare mode")
+	}
+	if len(options.ComparePatterns) != 2 || options.ComparePatterns[0] != "ab" || options.ComparePatterns[1] != "abcd" {
+		t.Fatalf("unexpected compare patterns: %#v", options.ComparePatterns)
+	}
+	if len(options.CompareBatches) != 2 || options.CompareBatches[0] != 2 || options.CompareBatches[1] != 4 {
+		t.Fatalf("unexpected compare batches: %#v", options.CompareBatches)
+	}
+	if len(options.CompareChecksum) != 2 || options.CompareChecksum[0] || !options.CompareChecksum[1] {
+		t.Fatalf("unexpected compare checksums: %#v", options.CompareChecksum)
+	}
+}
+
+func TestGetBenchmarkOptionsRejectsInvalidPhase6ComparisonFlags(t *testing.T) {
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	if err := cmd.ParseFlags([]string{"--compare-batch-sizes", "0"}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+
+	_, err := app.getBenchmarkOptions(cmd)
+	if err == nil {
+		t.Fatalf("expected invalid comparison flag error")
+	}
+	if !strings.Contains(err.Error(), "compare-batch-sizes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetBenchmarkOptionsRejectsInvalidMetalValidation(t *testing.T) {
+	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
+	cmd := benchmarkCommandForTest(t, app)
+
+	if err := cmd.ParseFlags([]string{"--metal-validation", "fast"}); err != nil {
+		t.Fatalf("failed to parse flags: %v", err)
+	}
+
+	_, err := app.getBenchmarkOptions(cmd)
+	if err == nil {
+		t.Fatalf("expected metal validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported metal validation mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecideBenchmarkDefaultKeepsCPUUnlessAllCasesAreStable(t *testing.T) {
+	decision, reason := decideBenchmarkDefault([]benchmarkComparisonCase{
+		{Decision: engine.NameMetal},
+		{Decision: engine.NameCPU},
+	})
+	if decision != engine.NameCPU {
+		t.Fatalf("expected cpu decision, got %q", decision)
+	}
+	if !strings.Contains(reason, "cpu remains default") {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+
+	decision, reason = decideBenchmarkDefault([]benchmarkComparisonCase{
+		{Decision: engine.NameMetal},
+		{Decision: engine.NameMetal},
+	})
+	if decision != engine.NameMetal {
+		t.Fatalf("expected metal decision, got %q", decision)
+	}
+	if !strings.Contains(reason, "metal can become default") {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestRunBenchmarkComparisonReportsDefaultDecision(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Worker.ThreadCount = 1
+	cfg.Logging.Enabled = false
+	app := NewApplication(cfg, "test", "test", "test")
+
+	result, err := app.runBenchmarkComparison(context.Background(), benchmarkOptions{
+		Attempts:        2,
+		Duration:        time.Second,
+		Engine:          engine.NameCPU,
+		RequestedEngine: engine.NameAuto,
+		Network:         "ethereum",
+		BatchSize:       1,
+		Format:          benchmarkFormatJSON,
+		MetalValidation: engine.MetalValidationFull,
+		ComparePatterns: []string{"ab"},
+		CompareBatches:  []int{1},
+		CompareChecksum: []bool{false},
+		Criteria: wallet.GenerationCriteria{
+			Network: "ethereum",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Phase != "6" {
+		t.Fatalf("expected phase 6, got %q", result.Phase)
+	}
+	if result.DefaultEngineDecision == "" {
+		t.Fatalf("expected default engine decision")
+	}
+	if len(result.Cases) != 1 {
+		t.Fatalf("expected one comparison case, got %d", len(result.Cases))
+	}
+	if result.Cases[0].CPU == nil {
+		t.Fatalf("expected cpu result")
+	}
+	if engine.MetalAvailable() && result.Cases[0].Metal == nil {
+		t.Fatalf("expected metal result when metal is available: %s", result.Cases[0].Error)
 	}
 }
 
@@ -152,6 +390,14 @@ func TestRunBenchmarkEngineProcessesRealAttempts(t *testing.T) {
 
 	if result.Engine != engine.NameCPU {
 		t.Fatalf("expected cpu engine, got %q", result.Engine)
+	}
+
+	if result.MetalAvailable != engine.MetalAvailable() {
+		t.Fatalf("expected metal availability diagnostic to be populated")
+	}
+
+	if result.CPUThroughput <= 0 {
+		t.Fatalf("expected cpu throughput diagnostic")
 	}
 
 	if result.AverageSpeed <= 0 {

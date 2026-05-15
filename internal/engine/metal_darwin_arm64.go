@@ -29,6 +29,12 @@ static char* metal_copy_error(NSError *error) {
 	return metal_copy_string([error localizedDescription]);
 }
 
+static void metal_zero_buffer(id<MTLBuffer> buffer) {
+	if (buffer != nil) {
+		memset([buffer contents], 0, [buffer length]);
+	}
+}
+
 static int metal_available(void) {
 	@autoreleasepool {
 		id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -310,6 +316,10 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 		id<MTLBuffer> suffix_buffer = [device newBufferWithLength:suffix_byte_count options:MTLResourceStorageModeShared];
 		id<MTLBuffer> result_buffer = [device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
 		if (private_key_buffer == nil || prefix_buffer == nil || suffix_buffer == nil || result_buffer == nil) {
+			metal_zero_buffer(private_key_buffer);
+			metal_zero_buffer(prefix_buffer);
+			metal_zero_buffer(suffix_buffer);
+			metal_zero_buffer(result_buffer);
 			*error_msg = strdup("failed to allocate metal buffers");
 			return 5;
 		}
@@ -328,6 +338,10 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 		id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
 		id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
 		if (command_buffer == nil || encoder == nil) {
+			metal_zero_buffer(private_key_buffer);
+			metal_zero_buffer(prefix_buffer);
+			metal_zero_buffer(suffix_buffer);
+			metal_zero_buffer(result_buffer);
 			*error_msg = strdup("failed to create metal command encoder");
 			return 7;
 		}
@@ -358,10 +372,18 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 
 		if ([command_buffer status] == MTLCommandBufferStatusError) {
 			*error_msg = metal_copy_error([command_buffer error]);
+			metal_zero_buffer(private_key_buffer);
+			metal_zero_buffer(prefix_buffer);
+			metal_zero_buffer(suffix_buffer);
+			metal_zero_buffer(result_buffer);
 			return 8;
 		}
 
 		*matches = *result_contents;
+		metal_zero_buffer(private_key_buffer);
+		metal_zero_buffer(prefix_buffer);
+		metal_zero_buffer(suffix_buffer);
+		metal_zero_buffer(result_buffer);
 		*buffer_ns = (buffer_end - buffer_start) * 1000000000.0;
 		*kernel_ns = (end - start) * 1000000000.0;
 		return 0;
@@ -396,6 +418,23 @@ func MetalAvailable() bool {
 
 func MetalUnavailableReason() string {
 	return "metal device not available; using cpu"
+}
+
+func MetalDeviceName() string {
+	if !MetalAvailable() {
+		return ""
+	}
+	context, err := newMetalMatchContext()
+	if err != nil {
+		return ""
+	}
+	defer C.metal_release_match_context(context)
+
+	name, err := metalContextDeviceName(context)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 func NewMetalEngine() (BenchmarkEngine, error) {
@@ -451,6 +490,11 @@ func (e *MetalEngine) RunBenchmark(ctx context.Context, options BenchmarkOptions
 	if err != nil {
 		return nil, err
 	}
+	validationMode, err := NormalizeMetalValidationMode(options.MetalValidation)
+	if err != nil {
+		return nil, err
+	}
+	options.MetalValidation = validationMode
 
 	batchSize := options.BatchSize
 	if batchSize <= 0 || batchSize > targetAttempts {
@@ -479,7 +523,7 @@ func (e *MetalEngine) RunBenchmark(ctx context.Context, options BenchmarkOptions
 		}
 
 		currentBatchSize := min(batchSize, targetAttempts-int(totalAttempts))
-		batchAttempts, batchMatches, batchStages, batchMetalBufferDuration, batchKernelDuration, err := runMetalHybridBatch(e.context, benchmarkCtx, currentBatchSize, prefixNibbles, suffixNibbles)
+		batchAttempts, batchMatches, batchStages, batchMetalBufferDuration, batchKernelDuration, err := runMetalHybridBatch(e.context, benchmarkCtx, currentBatchSize, prefixNibbles, suffixNibbles, validationMode)
 		if err != nil {
 			if totalAttempts > 0 && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 				break
@@ -547,10 +591,13 @@ func (e *MetalEngine) buildHybridBenchmarkResult(options BenchmarkOptions, batch
 		Pattern:                options.Criteria.GetPattern(),
 		BatchSize:              batchSize,
 		IsHybrid:               true,
+		MetalValidation:        options.MetalValidation,
 		Matches:                totalMatches,
 		TotalAttempts:          totalAttempts,
 		TotalDuration:          totalDuration,
 		AverageSpeed:           averageSpeed,
+		CPUThroughput:          throughputForDuration(totalAttempts, stages.Scalar+stages.Hash+stages.Match),
+		GPUThroughput:          throughputForDuration(totalAttempts, kernelDuration),
 		MinSpeed:               minSpeed,
 		MaxSpeed:               maxSpeed,
 		SpeedSamples:           speedSamples,
@@ -604,41 +651,61 @@ func generateEthereumPrivateKeyBatch(ctx context.Context, attempts int) ([]byte,
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
+			zeroBytes(privateKeys)
 			return nil, totals, ctx.Err()
 		default:
 		}
 
 		privateKey, entropyDuration, err := generateEthereumPrivateKeyAttempt()
 		if err != nil {
+			zeroBytes(privateKeys)
 			return nil, totals, err
 		}
 		copy(privateKeys[i*32:(i+1)*32], privateKey[:])
+		zeroBytes(privateKey[:])
 		totals.Entropy += entropyDuration
 	}
 
 	return privateKeys, totals, nil
 }
 
-func runMetalHybridBatch(context unsafe.Pointer, ctx context.Context, attempts int, prefix []byte, suffix []byte) (int, uint32, stageTotals, time.Duration, time.Duration, error) {
+func runMetalHybridBatch(context unsafe.Pointer, ctx context.Context, attempts int, prefix []byte, suffix []byte, validationMode string) (int, uint32, stageTotals, time.Duration, time.Duration, error) {
 	privateKeys, stages, err := generateEthereumPrivateKeyBatch(ctx, attempts)
 	if err != nil {
 		return 0, 0, stages, 0, 0, err
 	}
-
-	cpuMatches, scalarDuration, hashDuration, matchDuration := countPrivateKeyMatches(privateKeys, prefix, suffix)
-	stages.Scalar = scalarDuration
-	stages.Hash = hashDuration
-	stages.Match = matchDuration
+	defer zeroBytes(privateKeys)
 
 	gpuMatches, metalBufferDuration, kernelDuration, err := runMetalMatch(context, privateKeys, prefix, suffix)
 	if err != nil {
 		return 0, 0, stages, metalBufferDuration, kernelDuration, err
 	}
-	if gpuMatches != cpuMatches {
-		return 0, 0, stages, metalBufferDuration, kernelDuration, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, cpuMatches)
+	validationStages, err := validateMetalBatch(privateKeys, prefix, suffix, gpuMatches, validationMode)
+	if err != nil {
+		return 0, 0, stages, metalBufferDuration, kernelDuration, err
 	}
+	stages.Scalar += validationStages.Scalar
+	stages.Hash += validationStages.Hash
+	stages.Match += validationStages.Match
 
 	return len(privateKeys) / 32, gpuMatches, stages, metalBufferDuration, kernelDuration, nil
+}
+
+func validateMetalBatch(privateKeys []byte, prefix []byte, suffix []byte, gpuMatches uint32, validationMode string) (stageTotals, error) {
+	validationMode, err := NormalizeMetalValidationMode(validationMode)
+	if err != nil {
+		return stageTotals{}, err
+	}
+	if validationMode != MetalValidationFull {
+		return stageTotals{}, fmt.Errorf("unsupported metal validation mode %q", validationMode)
+	}
+
+	cpuMatches, scalarDuration, hashDuration, matchDuration := countPrivateKeyMatches(privateKeys, prefix, suffix)
+	stages := stageTotals{Scalar: scalarDuration, Hash: hashDuration, Match: matchDuration}
+	if gpuMatches != cpuMatches {
+		return stages, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, cpuMatches)
+	}
+	return stages, nil
 }
 
 func countPrivateKeyMatches(privateKeys []byte, prefix []byte, suffix []byte) (uint32, time.Duration, time.Duration, time.Duration) {
@@ -678,6 +745,9 @@ func runMetalMatch(context unsafe.Pointer, privateKeys []byte, prefix []byte, su
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	if err := validatePrivateKeyBatch(privateKeys); err != nil {
+		return 0, 0, 0, err
+	}
 
 	var bufferNS C.double
 	var kernelNS C.double
@@ -698,6 +768,15 @@ func runMetalMatch(context unsafe.Pointer, privateKeys []byte, prefix []byte, su
 	}
 
 	return uint32(matches), durationFromNanoseconds(float64(bufferNS)), durationFromNanoseconds(float64(kernelNS)), nil
+}
+
+func validatePrivateKeyBatch(privateKeys []byte) error {
+	for i := 0; i < len(privateKeys); i += 32 {
+		if !validSecp256k1PrivateKey(privateKeys[i : i+32]) {
+			return fmt.Errorf("metal match private key %d is outside secp256k1 range", i/32)
+		}
+	}
+	return nil
 }
 
 func metalPrivateKeyBatchCount(privateKeys []byte, maxCount int) (uint32, error) {

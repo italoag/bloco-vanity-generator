@@ -42,6 +42,39 @@ func TestResolveMetalReturnsClearUnavailableError(t *testing.T) {
 	}
 }
 
+func TestNormalizeMetalValidationMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		wantErr  bool
+	}{
+		{name: "empty defaults to full", input: "", expected: MetalValidationFull},
+		{name: "full", input: "full", expected: MetalValidationFull},
+		{name: "sampled rejected", input: " SAMPLED ", wantErr: true},
+		{name: "none rejected", input: "none", wantErr: true},
+		{name: "invalid", input: "fast", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual, err := NormalizeMetalValidationMode(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if actual != tt.expected {
+				t.Fatalf("expected %q, got %q", tt.expected, actual)
+			}
+		})
+	}
+}
+
 func TestCPUEngineRunBenchmarkProcessesAttempts(t *testing.T) {
 	engine := NewCPUEngine()
 	result, err := engine.RunBenchmark(context.Background(), BenchmarkOptions{
@@ -77,6 +110,34 @@ func TestCPUEngineRunBenchmarkProcessesAttempts(t *testing.T) {
 
 	if result.ScalarBaseMultDuration <= 0 {
 		t.Fatalf("expected scalar timing to be recorded")
+	}
+}
+
+func TestValidSecp256k1PrivateKeyRange(t *testing.T) {
+	zero := make([]byte, 32)
+	if validSecp256k1PrivateKey(zero) {
+		t.Fatalf("expected zero private key to be invalid")
+	}
+
+	one := make([]byte, 32)
+	one[31] = 1
+	if !validSecp256k1PrivateKey(one) {
+		t.Fatalf("expected private key one to be valid")
+	}
+
+	order := secp256k1Order.FillBytes(make([]byte, 32))
+	if validSecp256k1PrivateKey(order) {
+		t.Fatalf("expected secp256k1 order to be invalid")
+	}
+}
+
+func TestZeroBytesClearsSensitiveBuffer(t *testing.T) {
+	values := []byte{1, 2, 3, 4}
+	zeroBytes(values)
+	for i, value := range values {
+		if value != 0 {
+			t.Fatalf("expected byte %d to be zero, got %d", i, value)
+		}
 	}
 }
 
@@ -178,6 +239,36 @@ func TestMetalEngineRunBenchmarkSamplesBatchesWhenAvailable(t *testing.T) {
 
 	if samples[len(samples)-1].Result == nil {
 		t.Fatalf("expected final sample to include result")
+	}
+}
+
+func TestMetalEngineRunBenchmarkRejectsNonFullValidation(t *testing.T) {
+	if !MetalAvailable() {
+		t.Skip("metal backend unavailable in this build")
+	}
+
+	benchmarkEngine, err := NewMetalEngine()
+	if err != nil {
+		t.Fatalf("expected metal engine, got %v", err)
+	}
+
+	_, err = benchmarkEngine.RunBenchmark(context.Background(), BenchmarkOptions{
+		Attempts:        2,
+		Duration:        time.Second,
+		BatchSize:       2,
+		ThreadCount:     1,
+		Network:         "ethereum",
+		RequestedEngine: NameMetal,
+		MetalValidation: "none",
+		Criteria: wallet.GenerationCriteria{
+			Network: "ethereum",
+		},
+	}, time.Hour, nil)
+	if err == nil {
+		t.Fatalf("expected non-full metal validation to be rejected")
+	}
+	if !strings.Contains(err.Error(), "Phase 4 requires full CPU verification") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

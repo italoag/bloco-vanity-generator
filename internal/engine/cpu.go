@@ -204,8 +204,10 @@ func runEthereumPublicKeyAttempt() ([64]byte, stageTotals, error) {
 
 	privateKey, entropyDuration, err := generateEthereumPrivateKeyAttempt()
 	if err != nil {
+		zeroBytes(privateKey[:])
 		return publicKey, stages, err
 	}
+	defer zeroBytes(privateKey[:])
 	stages.Entropy = entropyDuration
 
 	stageStart := time.Now()
@@ -223,6 +225,7 @@ func generateEthereumPrivateKeyAttempt() ([32]byte, time.Duration, error) {
 	start := time.Now()
 	for {
 		if _, err := crand.Read(privateKey[:]); err != nil {
+			zeroBytes(privateKey[:])
 			return privateKey, time.Since(start), err
 		}
 		if validSecp256k1PrivateKey(privateKey[:]) {
@@ -237,6 +240,13 @@ func validSecp256k1PrivateKey(privateKey []byte) bool {
 	}
 	value := new(big.Int).SetBytes(privateKey)
 	return value.Sign() > 0 && value.Cmp(secp256k1Order) < 0
+}
+
+func zeroBytes(values []byte) {
+	for i := range values {
+		values[i] = 0
+	}
+	runtime.KeepAlive(values)
 }
 
 func EthereumAddressFromCoordinates(xBytes, yBytes []byte, hasher hash.Hash) string {
@@ -370,6 +380,7 @@ func collectResult(options BenchmarkOptions, workerCount int, totalAttempts int6
 		TotalAttempts:          totalAttempts,
 		TotalDuration:          totalDuration,
 		AverageSpeed:           averageSpeed,
+		CPUThroughput:          averageSpeed,
 		MinSpeed:               minSpeed,
 		MaxSpeed:               maxSpeed,
 		SpeedSamples:           speedSamples,
@@ -402,4 +413,11 @@ func speedRange(samples []float64) (float64, float64) {
 		}
 	}
 	return minSpeed, maxSpeed
+}
+
+func throughputForDuration(totalAttempts int64, duration time.Duration) float64 {
+	if totalAttempts <= 0 || duration <= 0 {
+		return 0
+	}
+	return float64(totalAttempts) / duration.Seconds()
 }

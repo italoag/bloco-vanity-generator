@@ -55,23 +55,28 @@ build: ## Build the application
 # Build for different platforms
 .PHONY: build-linux
 build-linux: ## Build for Linux AMD64
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-linux-amd64 $(SOURCE_FILE)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-linux-amd64 $(SOURCE_FILE)
 	@echo "Linux build completed: $(BINARY_NAME)-linux-amd64"
 
 .PHONY: build-windows
 build-windows: ## Build for Windows AMD64
-	GOOS=windows GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-windows-amd64.exe $(SOURCE_FILE)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-windows-amd64.exe $(SOURCE_FILE)
 	@echo "Windows build completed: $(BINARY_NAME)-windows-amd64.exe"
 
 .PHONY: build-darwin
 build-darwin: ## Build for macOS AMD64
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-darwin-amd64 $(SOURCE_FILE)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-darwin-amd64 $(SOURCE_FILE)
 	@echo "macOS build completed: $(BINARY_NAME)-darwin-amd64"
 
 .PHONY: build-darwin-arm64
-build-darwin-arm64: ## Build for macOS ARM64 (M1/M2)
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-darwin-arm64 $(SOURCE_FILE)
-	@echo "macOS ARM64 build completed: $(BINARY_NAME)-darwin-arm64"
+build-darwin-arm64: ## Build CPU-only for macOS ARM64 (M1/M2)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-darwin-arm64 $(SOURCE_FILE)
+	@echo "macOS ARM64 CPU-only build completed: $(BINARY_NAME)-darwin-arm64"
+
+.PHONY: build-darwin-arm64-metal
+build-darwin-arm64-metal: ## Build Metal-enabled for macOS ARM64 when macOS/Metal toolchain is available
+	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 $(GOBUILD) $(BUILD_FLAGS) -o $(BINARY_NAME)-darwin-arm64-metal $(SOURCE_FILE)
+	@echo "macOS ARM64 Metal build completed: $(BINARY_NAME)-darwin-arm64-metal"
 
 # Build for all platforms
 .PHONY: build-all

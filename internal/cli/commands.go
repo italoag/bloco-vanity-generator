@@ -859,6 +859,11 @@ func (app *Application) createBenchmarkCommand() *cobra.Command {
 	cmd.Flags().Bool("detailed", false, "Show detailed per-thread statistics")
 	cmd.Flags().Int("batch-size", 5000, "Number of candidates processed per benchmark worker batch")
 	cmd.Flags().String("pattern", "", "Address prefix pattern for benchmark compatibility")
+	cmd.Flags().String("metal-validation", engine.MetalValidationFull, "Metal CPU validation mode (Phase 4 requires full)")
+	cmd.Flags().Bool("compare", false, "Run Phase 6 CPU vs Metal comparison matrix")
+	cmd.Flags().String("compare-patterns", "ab,abcd,abcdef", "Comma-separated prefix patterns for Phase 6 comparison")
+	cmd.Flags().String("compare-batch-sizes", "1000,5000,10000", "Comma-separated batch sizes for Phase 6 comparison")
+	cmd.Flags().String("compare-checksums", "off,on", "Comma-separated checksum modes for Phase 6 comparison (off,on)")
 
 	return cmd
 }
@@ -870,6 +875,9 @@ func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 	options, err := app.getBenchmarkOptions(cmd)
 	if err != nil {
 		return err
+	}
+	if options.Compare {
+		return app.runBenchmarkComparisonText(ctx, options)
 	}
 
 	// Check if TUI should be used
