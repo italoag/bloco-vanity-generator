@@ -57,7 +57,7 @@ func (app *Application) setupCommands() {
 	app.rootCmd = &cobra.Command{
 		Use:   "bloco-vgen",
 		Short: "High-performance Ethereum wallet generator for custom address patterns",
-		Long: `Bloco-ETH is a high-performance CLI tool for generating Ethereum wallets 
+		Long: `Bloco Vanity Generator is a high-performance CLI tool for generating Ethereum wallets 
 with custom prefixes and suffixes. It supports EIP-55 checksum validation,
 multi-threaded generation for optimal performance, automatic KeyStore V3
 file generation, and secure logging that never exposes sensitive data.`,
