@@ -7,6 +7,5 @@ build/
 references/
 keystores/
 .crush/
-./bloco-vgen
-./bloco-vgen-darwin-arm64
-./bloco-vgen-darwin-arm64-metal
+/bloco-vgen
+bloco-vgen-*
