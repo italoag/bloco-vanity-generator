@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/rand"
 	"fmt"
 	"math/big"
 	"strings"
@@ -34,6 +33,8 @@ type Pool struct {
 	statsCancel    context.CancelFunc
 	poolManager    *crypto.PoolManager
 	generator      crypto.Generator
+	chains         []*crypto.PrivateKeyChain // reused across generation calls
+	chainsMu       sync.Mutex
 }
 
 const (
@@ -153,6 +154,26 @@ func (p *Pool) GetStatsCollector() *StatsCollector {
 	return p.statsCollector
 }
 
+// getChain returns the chained key generator for a worker, creating it on
+// first use. Chains are reused across GenerateWalletWithContext calls so
+// batch generation does not rebuild the (expensive) point chain per wallet.
+func (p *Pool) getChain(workerID int) (*crypto.PrivateKeyChain, error) {
+	p.chainsMu.Lock()
+	defer p.chainsMu.Unlock()
+	if workerID < len(p.chains) && p.chains[workerID] != nil {
+		return p.chains[workerID], nil
+	}
+	for len(p.chains) <= workerID {
+		p.chains = append(p.chains, nil)
+	}
+	chain, err := crypto.NewPrivateKeyChain()
+	if err != nil {
+		return nil, err
+	}
+	p.chains[workerID] = chain
+	return chain, nil
+}
+
 // GenerateWalletWithContext generates a wallet using the worker pool
 func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.GenerationCriteria) (*wallet.GenerationResult, error) {
 	// Log operation start
@@ -183,6 +204,9 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 			attempts := int64(0)
 			startTime := time.Now()
 			lastStatsUpdate := startTime
+			// Per-worker chained key generator: state persists across loop
+			// iterations (each chain produces ChainBatchSize keys).
+			var chain *crypto.PrivateKeyChain
 
 			for {
 				select {
@@ -220,11 +244,10 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 
 				// Generate private key material based on generation strategy
 				var (
-					privateKey         *ecdsa.PrivateKey
-					mnemonic           string
-					err                error
-					addressStr         string
-					rawPrivateKeyBytes []byte // Added this variable as it's used later in the original code
+					privateKey *ecdsa.PrivateKey
+					mnemonic   string
+					err        error
+					addressStr string
 				)
 
 				// Mnemonic generation is only supported for Ethereum
@@ -325,15 +348,31 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 					}
 
 				} else {
-					// Optimized path using AddressGenerator and object pooling
-					// Get private key buffer from pool
-					cryptoPool := p.poolManager.GetCryptoPool()
-					privateKeyBytes := cryptoPool.GetPrivateKeyBuffer()
+					// Fast path using the chained private key generator: each
+					// worker derives keys from a random seed as k0, k0+1, ...
+					// with incremental point addition (P + G) and a single
+					// batched field inversion per batch. This is much faster
+					// than one full scalar multiplication per key.
+					if chain == nil {
+						chain, err = p.getChain(workerID)
+						if err != nil {
+							if p.logger != nil {
+								context := map[string]interface{}{
+									"worker_id": workerID,
+									"attempts":  attempts,
+								}
+								if logErr := p.logger.LogError("crypto_key_generation", err, context); logErr != nil {
+									_ = logErr
+								}
+							}
+							continue
+						}
+					}
 
-					// Generate random private key
-					_, err := rand.Read(privateKeyBytes)
+					var keyBytes [32]byte
+					var pub [64]byte
+					keyBytes, pub, err = chain.NextKey()
 					if err != nil {
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
 						if p.logger != nil {
 							context := map[string]interface{}{
 								"worker_id": workerID,
@@ -346,46 +385,37 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 						continue
 					}
 
-					// Generate address using generator
-					addressStr, err = p.generator.GenerateAddressFromPrivateKey(privateKeyBytes)
-					if err != nil {
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
-						if p.logger != nil {
-							context := map[string]interface{}{
-								"worker_id": workerID,
-								"attempts":  attempts,
-							}
-							if logErr := p.logger.LogError("address_generation", err, context); logErr != nil {
-								_ = logErr
-							}
+					// Match against the pattern using raw address bytes for
+					// case-insensitive patterns; EIP-55 checksum patterns still
+					// need the checksummed string.
+					addressBytes := crypto.AddressFromPublicKey(&pub)
+					rawAddress := formatEthereumAddressBytes(addressBytes)
+					if criteria.IsChecksum {
+						addressStr = toChecksumAddress(rawAddress)
+						if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
+							continue
 						}
-						continue
-					}
-
-					// If we found a match, we need to reconstruct the full private key object for the result
-					// Otherwise we just return the buffer to the pool
-					if matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
-						// Only reconstruct ECDSA private key for Ethereum
-						// For Solana and Bitcoin, we'll use the raw bytes directly
-						if criteria.Network == "ethereum" || criteria.Network == "" {
-							// Reconstruct private key for result (Ethereum only)
-							privateKey = new(ecdsa.PrivateKey)
-							privateKey.Curve = ethcrypto.S256()
-							privateKey.D = new(big.Int).SetBytes(privateKeyBytes)
-							privateKey.X, privateKey.Y = ethcrypto.S256().ScalarBaseMult(privateKeyBytes)
-						} else {
-							// For non-Ethereum, store the raw bytes
-							rawPrivateKeyBytes = make([]byte, len(privateKeyBytes))
-							copy(rawPrivateKeyBytes, privateKeyBytes)
-						}
-
-						// We can return the buffer now as we've copied it to big.Int (or we don't need it for non-Ethereum)
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
 					} else {
-						// No match, return buffer and continue
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
-						continue
+						prefixNibbles, suffixNibbles := crypto.NibblePatterns(criteria.Prefix, criteria.Suffix)
+						if (criteria.Prefix != "" || criteria.Suffix != "") && prefixNibbles == nil {
+							// Invalid pattern: fall back to the string matcher
+							addressStr = rawAddress
+							if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
+								continue
+							}
+						} else if !crypto.MatchesAddressNibbles(&addressBytes, prefixNibbles, suffixNibbles) {
+							continue
+						} else {
+							addressStr = rawAddress
+						}
 					}
+
+					// Found a match: reconstruct the ECDSA private key for the
+					// result (Ethereum only).
+					privateKey = new(ecdsa.PrivateKey)
+					privateKey.Curve = ethcrypto.S256()
+					privateKey.D = new(big.Int).SetBytes(keyBytes[:])
+					privateKey.X, privateKey.Y = ethcrypto.S256().ScalarBaseMult(keyBytes[:])
 				}
 
 				// Check if address matches criteria (re-check for mnemonic path, or use result from optimized path)
@@ -557,6 +587,20 @@ func matchesCriteria(address, prefix, suffix string, isChecksum bool, network st
 // toChecksumAddress converts an address to EIP-55 checksum format
 func toChecksumAddress(address string) string {
 	return vanity.ToChecksumAddress(address)
+}
+
+// formatEthereumAddressBytes formats raw address bytes as a lowercase
+// 0x-prefixed hex string without allocations on the hot path.
+func formatEthereumAddressBytes(addressBytes [20]byte) string {
+	const hexChars = "0123456789abcdef"
+	var out [42]byte
+	out[0] = '0'
+	out[1] = 'x'
+	for i := 0; i < 20; i++ {
+		out[2+i*2] = hexChars[addressBytes[i]>>4]
+		out[3+i*2] = hexChars[addressBytes[i]&0x0f]
+	}
+	return string(out[:])
 }
 
 // isEIP55Checksum validates EIP-55 checksum for specific pattern

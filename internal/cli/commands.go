@@ -92,8 +92,9 @@ func (app *Application) addGlobalFlags() {
 	flags.IntP("threads", "t", 0, "Number of worker threads (0 = auto-detect)")
 	flags.String("engine", "auto", "Generation engine (auto, cpu, metal)")
 	flags.Int("gpu-batch-size", engine.DefaultMetalBatchSize, "Number of candidates processed per Metal generation batch")
-	flags.Bool("progress", false, "Show progress information")
-	flags.Bool("tui", true, "Use terminal UI (when available)")
+	flags.Bool("progress", false, "Show progress information (text mode)")
+	flags.Bool("tui", true, "Use the terminal UI (default; disable with --no-tui)")
+	flags.Bool("no-tui", false, "Disable the terminal UI and use plain text output")
 
 	// Output parameters
 	flags.BoolP("verbose", "v", false, "Enable verbose output")
@@ -181,7 +182,7 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 	// the interface, the text path keeps the original printf so both modes
 	// expose the same engine, device and batch context before generation.
 	engineInfo := newTUIEngineInfo(engineSelection, generationOptions, app.config.Worker.ThreadCount)
-	if !app.willUseTUI(showProgress) {
+	if !app.willUseTUI() {
 		app.displayGenerationEngineDiagnostics(engineSelection, generationOptions, showProgress)
 	}
 
@@ -196,8 +197,10 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 // willUseTUI mirrors the decision used by generateSingleWallet and
 // generateMultipleWallets so callers can suppress duplicate text-mode
 // diagnostics when the TUI will render the same information inline.
-func (app *Application) willUseTUI(showProgress bool) bool {
-	if !showProgress || app.config.CLI.QuietMode || !app.config.TUI.Enabled {
+// The TUI is the default execution mode: it is used whenever it is enabled
+// in the config (i.e. --no-tui was not passed) and the terminal supports it.
+func (app *Application) willUseTUI() bool {
+	if app.config.CLI.QuietMode || !app.config.TUI.Enabled {
 		return false
 	}
 	return tui.NewTUIManager().ShouldUseTUI()
@@ -231,9 +234,11 @@ func (app *Application) generateSingleWallet(
 	showProgress bool,
 	engineInfo tui.EngineInfo,
 ) error {
-	// Check if TUI should be used for progress
+	// Check if TUI should be used for progress. The TUI is the default
+	// execution mode; it is skipped only when disabled (--no-tui), in quiet
+	// mode, or when the terminal does not support it.
 	tuiManager := tui.NewTUIManager()
-	useTUI := app.config.TUI.Enabled && showProgress && !app.config.CLI.QuietMode
+	useTUI := app.config.TUI.Enabled && !app.config.CLI.QuietMode
 
 	// Debug TUI decision
 	if os.Getenv("BLOCO_DEBUG") != "" {
@@ -478,9 +483,11 @@ func (app *Application) generateMultipleWallets(
 	showProgress bool,
 	engineInfo tui.EngineInfo,
 ) error {
-	// Check if TUI should be used for multiple wallets
+	// Check if TUI should be used for multiple wallets. The TUI is the
+	// default execution mode; it is skipped only when disabled (--no-tui),
+	// in quiet mode, or when the terminal does not support it.
 	tuiManager := tui.NewTUIManager()
-	useTUI := app.config.TUI.Enabled && showProgress && !app.config.CLI.QuietMode
+	useTUI := app.config.TUI.Enabled && !app.config.CLI.QuietMode
 
 	// Debug TUI decision for multiple wallets
 	if os.Getenv("BLOCO_DEBUG") != "" {
@@ -828,9 +835,12 @@ func (app *Application) showStats(cmd *cobra.Command, args []string) error {
 	difficulty := calculateDifficulty(criteria)
 	probability50 := calculateProbability50(difficulty)
 
-	// Check if TUI should be used
+	// Check if TUI should be used (default mode; --no-tui disables it)
 	tuiManager := tui.NewTUIManager()
 	useTUI, _ := cmd.Flags().GetBool("tui")
+	if noTUI, _ := cmd.Flags().GetBool("no-tui"); noTUI {
+		useTUI = false
+	}
 
 	if useTUI && tuiManager.ShouldUseTUI() {
 		return app.showStatsTUI(criteria, difficulty, probability50, engineInfo)
@@ -1192,7 +1202,11 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 		app.config.CLI.QuietMode = true
 	}
 
-	// Parse TUI option
+	// Parse TUI option: --no-tui disables the TUI (the default execution
+	// mode); --tui=false is kept for backwards compatibility.
+	if noTUI, _ := cmd.Flags().GetBool("no-tui"); noTUI {
+		app.config.TUI.Enabled = false
+	}
 	if tui, _ := cmd.Flags().GetBool("tui"); !tui {
 		app.config.TUI.Enabled = false
 	}

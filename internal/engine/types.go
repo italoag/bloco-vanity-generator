@@ -112,11 +112,15 @@ func ResolveGeneration(requested string, criteria wallet.GenerationCriteria) (Se
 	case NameCPU:
 		return Selection{Requested: requested, Resolved: NameCPU}, nil
 	case NameAuto:
+		// The CPU engine (chained point addition) is currently 10x+ faster
+		// than the Metal hybrid on Apple Silicon, so auto prefers CPU for
+		// generation. Metal remains opt-in via --engine metal until the
+		// kernel and validation pipeline catch up.
 		if supportErr != nil {
 			return Selection{Requested: requested, Resolved: NameCPU, FallbackReason: "metal generation unsupported: " + supportErr.Error()}, nil
 		}
 		if MetalAvailable() {
-			return Selection{Requested: requested, Resolved: NameMetal}, nil
+			return Selection{Requested: requested, Resolved: NameCPU, FallbackReason: "cpu is faster than the metal hybrid for generation; use --engine metal to force"}, nil
 		}
 		return Selection{Requested: requested, Resolved: NameCPU, FallbackReason: MetalUnavailableReason()}, nil
 	case NameMetal:

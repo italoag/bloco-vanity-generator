@@ -65,7 +65,7 @@ func TestResolveGenerationMetalRejectsUnsupportedMnemonic(t *testing.T) {
 	}
 }
 
-func TestResolveGenerationAutoUsesMetalWhenAvailable(t *testing.T) {
+func TestResolveGenerationAutoPrefersCPUWhenMetalAvailable(t *testing.T) {
 	if !MetalAvailable() {
 		t.Skip("metal backend unavailable in this build")
 	}
@@ -73,8 +73,11 @@ func TestResolveGenerationAutoUsesMetalWhenAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if selection.Resolved != NameMetal {
-		t.Fatalf("expected metal engine, got %q", selection.Resolved)
+	if selection.Resolved != NameCPU {
+		t.Fatalf("expected cpu engine for auto generation, got %q", selection.Resolved)
+	}
+	if selection.FallbackReason == "" {
+		t.Fatalf("expected fallback reason explaining cpu preference")
 	}
 }
 
@@ -196,8 +199,6 @@ func TestMetalEngineRunBenchmarkWhenAvailable(t *testing.T) {
 		RequestedEngine: NameMetal,
 		Criteria: wallet.GenerationCriteria{
 			Network: "ethereum",
-			Prefix:  "ab",
-			Suffix:  "cd",
 		},
 	}, time.Hour, nil)
 	if err != nil {

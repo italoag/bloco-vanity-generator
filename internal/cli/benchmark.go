@@ -130,6 +130,9 @@ func (app *Application) getBenchmarkOptions(cmd *cobra.Command) (benchmarkOption
 	format, _ := cmd.Flags().GetString("format")
 	output, _ := cmd.Flags().GetString("output")
 	useTUI, _ := cmd.Flags().GetBool("tui")
+	if noTUI, _ := cmd.Flags().GetBool("no-tui"); noTUI {
+		useTUI = false
+	}
 	metalValidation, _ := cmd.Flags().GetString("metal-validation")
 	comparePatterns, err := parseBenchmarkPatternList(flagString(cmd, "compare-patterns"))
 	if err != nil {

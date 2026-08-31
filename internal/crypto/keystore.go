@@ -700,8 +700,32 @@ func (ks *KeyStoreV3) Validate() error {
 		return fmt.Errorf("IV cannot be empty")
 	}
 
+	if len(ks.Crypto.CipherParams.IV) != 32 {
+		return fmt.Errorf("IV must be 32 hex characters (16 bytes), got %d", len(ks.Crypto.CipherParams.IV))
+	}
+
+	if len(ks.Crypto.CipherText) != 64 {
+		return fmt.Errorf("ciphertext must be 64 hex characters (32 bytes), got %d", len(ks.Crypto.CipherText))
+	}
+
+	if len(ks.Crypto.MAC) != 64 {
+		return fmt.Errorf("MAC must be 64 hex characters (32 bytes), got %d", len(ks.Crypto.MAC))
+	}
+
 	if ks.Crypto.KDFParams == nil {
 		return fmt.Errorf("KDF parameters cannot be nil")
+	}
+
+	// Validate the KDF salt length (32 bytes = 64 hex characters)
+	switch params := ks.Crypto.KDFParams.(type) {
+	case ScryptParams:
+		if len(params.Salt) != 64 {
+			return fmt.Errorf("scrypt salt must be 64 hex characters (32 bytes), got %d", len(params.Salt))
+		}
+	case PBKDF2Params:
+		if len(params.Salt) != 64 {
+			return fmt.Errorf("pbkdf2 salt must be 64 hex characters (32 bytes), got %d", len(params.Salt))
+		}
 	}
 
 	return nil
@@ -1046,9 +1070,13 @@ func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, passwo
 		return nil, NewKeyStoreError("encrypt", "mac", fmt.Errorf("MAC generation failed: %w", err))
 	}
 
-	// Derive Ethereum address from private key (placeholder - would need actual implementation)
-	// For now, we'll use a placeholder address
-	address := "0000000000000000000000000000000000000000"
+	// Derive Ethereum address from the private key
+	privateKey, err := crypto.ToECDSA(privateKeyBytes)
+	if err != nil {
+		return nil, NewKeyStoreError("encrypt", "private_key",
+			fmt.Errorf("invalid private key: %w", err))
+	}
+	address := strings.ToLower(strings.TrimPrefix(crypto.PubkeyToAddress(privateKey.PublicKey).Hex(), "0x"))
 
 	// Create KeyStore V3 structure
 	keystore := NewKeyStoreV3(address, "ethereum")
@@ -1461,8 +1489,9 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 	// Format address with 0x prefix for Ethereum
 	formattedAddress := formatAddressForFilename(address, "ethereum")
 
-	// Get file paths
-	keystorePath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.json", formattedAddress))
+	// Get file paths; use the geth-compatible UTC--<timestamp>--<address>.json
+	// naming convention so tools (geth, MyCrypto, Firefly) can import the file.
+	keystorePath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("UTC--%s--%s.json", utcTimestamp(), formattedAddress))
 	passwordPath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.pwd", formattedAddress))
 
 	// Check if files already exist and warn (but don't fail)
@@ -1898,15 +1927,39 @@ func (ks *KeyStoreService) FileExists(filename string) (bool, error) {
 	}
 }
 
-// GetKeystoreFilePath returns the full path for a keystore file given an address
+// GetKeystoreFilePath returns the full path for a keystore file given an
+// address. Keystore files use the geth naming convention
+// UTC--<timestamp>--<address>.json, so the file is located by scanning the
+// output directory for a matching address suffix.
 func (ks *KeyStoreService) GetKeystoreFilePath(address string) (string, error) {
 	cleanAddress := strings.TrimPrefix(address, "0x")
 	if len(cleanAddress) == 0 {
 		return "", fmt.Errorf("address cannot be empty")
 	}
 
-	filename := fmt.Sprintf("%s.json", formatAddressForFilename(address, "ethereum"))
-	return filepath.Join(ks.config.OutputDirectory, filename), nil
+	formatted := formatAddressForFilename(address, "ethereum")
+	entries, err := os.ReadDir(ks.config.OutputDirectory)
+	if err != nil {
+		return "", &FileOperationError{Operation: "read_dir", Path: ks.config.OutputDirectory, Err: err}
+	}
+	suffix := fmt.Sprintf("--%s.json", formatted)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, suffix) {
+			return filepath.Join(ks.config.OutputDirectory, name), nil
+		}
+	}
+	// Fall back to the legacy <address>.json name for backwards compatibility.
+	return filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.json", formatted)), nil
+}
+
+// utcTimestamp returns the geth-style UTC timestamp used in keystore file
+// names: UTC--2006-01-02T15-04-05.000000000Z--<address>.json
+func utcTimestamp() string {
+	return time.Now().UTC().Format("2006-01-02T15-04-05.000000000Z")
 }
 
 // GetPasswordFilePath returns the full path for a password file given an address

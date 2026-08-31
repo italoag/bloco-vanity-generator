@@ -47,12 +47,15 @@ func TestMetalKernelDerivesEthereumAddressFromPrivateKeyWhenAvailable(t *testing
 			t.Fatalf("unexpected prefix error for scalar %d: %v", i+1, err)
 		}
 
-		matches, _, kernelDuration, err := runMetalMatch(metalEngine.context, privateKeys, prefix, nil)
+		matches, matchIndices, _, kernelDuration, err := runMetalMatch(metalEngine.context, privateKeys, prefix, nil)
 		if err != nil {
 			t.Fatalf("expected no metal match error for scalar %d, got %v", i+1, err)
 		}
 		if matches != 1 {
 			t.Fatalf("expected one full-address match for scalar %d, got %d", i+1, matches)
+		}
+		if len(matchIndices) != 5 || matchIndices[0] != uint32(i) {
+			t.Fatalf("expected match index %d for scalar %d, got %v", i, i+1, matchIndices)
 		}
 		if kernelDuration <= 0 {
 			t.Fatalf("expected kernel duration to be recorded for scalar %d", i+1)
@@ -113,7 +116,7 @@ func TestMetalRunMatchRejectsInvalidPrivateKeyRange(t *testing.T) {
 	defer metalEngine.Close()
 
 	invalidPrivateKey := make([]byte, 32)
-	_, _, _, err = runMetalMatch(metalEngine.context, invalidPrivateKey, nil, nil)
+	_, _, _, _, err = runMetalMatch(metalEngine.context, invalidPrivateKey, nil, nil)
 	if err == nil {
 		t.Fatalf("expected invalid private key range error")
 	}

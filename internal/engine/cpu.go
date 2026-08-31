@@ -4,6 +4,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"hash"
 	"math/big"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/sha3"
 
+	"bloco-vgen/internal/crypto"
 	"bloco-vgen/internal/vanity"
 	"bloco-vgen/pkg/wallet"
 )
@@ -69,6 +71,20 @@ func (e *CPUEngine) RunBenchmark(ctx context.Context, options BenchmarkOptions, 
 			workerResult := workerTotals{}
 			defer func() { workerTotalsCh <- workerResult }()
 
+			// Each worker draws its own random chain. Public keys are
+			// derived incrementally (P + G) and converted to affine with a
+			// single batched inversion, which is much faster than one full
+			// scalar multiplication per key.
+			chain, err := crypto.NewPrivateKeyChain()
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				cancel()
+				return
+			}
+
 			for {
 				select {
 				case <-benchmarkCtx.Done():
@@ -88,7 +104,7 @@ func (e *CPUEngine) RunBenchmark(ctx context.Context, options BenchmarkOptions, 
 						return
 					}
 
-					matched, stages, err := runEthereumAttempt(options.Criteria)
+					matched, stages, err := runEthereumAttempt(chain, options.Criteria)
 					if err != nil {
 						select {
 						case errCh <- err:
@@ -171,14 +187,39 @@ func reserveAttempt(attempts *atomic.Int64, maxAttempts int64) bool {
 	}
 }
 
-func runEthereumAttempt(criteria wallet.GenerationCriteria) (bool, stageTotals, error) {
-	addressBytes, stages, err := runEthereumAddressAttempt()
-	if err != nil {
-		return false, stages, err
+func runEthereumAttempt(chain *crypto.PrivateKeyChain, criteria wallet.GenerationCriteria) (bool, stageTotals, error) {
+	var stages stageTotals
+	prefixNibbles, suffixNibbles := crypto.NibblePatterns(criteria.Prefix, criteria.Suffix)
+	if (criteria.Prefix != "" || criteria.Suffix != "") && prefixNibbles == nil {
+		return false, stages, fmt.Errorf("invalid pattern: %q", criteria.GetPattern())
 	}
 
 	stageStart := time.Now()
-	matched := MatchesCriteria(FormatEthereumAddressBytes(addressBytes), criteria)
+	_, pub, err := chain.NextKey()
+	if err != nil {
+		return false, stages, err
+	}
+	keyElapsed := time.Since(stageStart)
+	// The first key of a fresh batch includes seed generation, the chain
+	// build and the batched affine conversion.
+	if chain.Position() == 1 {
+		stages.Entropy = keyElapsed
+	} else {
+		stages.Scalar = keyElapsed
+	}
+
+	stageStart = time.Now()
+	addressBytes := crypto.AddressFromPublicKey(&pub)
+	stages.Hash = time.Since(stageStart)
+
+	stageStart = time.Now()
+	var matched bool
+	if criteria.IsChecksum && (criteria.Network == "ethereum" || criteria.Network == "") {
+		// EIP-55 checksum patterns require the checksummed address string.
+		matched = MatchesCriteria(FormatEthereumAddressBytes(addressBytes), criteria)
+	} else {
+		matched = crypto.MatchesAddressNibbles(&addressBytes, prefixNibbles, suffixNibbles)
+	}
 	stages.Match = time.Since(stageStart)
 
 	return matched, stages, nil

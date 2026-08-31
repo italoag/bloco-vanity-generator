@@ -12,6 +12,7 @@ import (
 
 	"bloco-vgen/internal/config"
 	"bloco-vgen/internal/engine"
+	"bloco-vgen/internal/tui"
 	"bloco-vgen/pkg/wallet"
 )
 
@@ -659,21 +660,28 @@ func TestNewBenchmarkTUIEngineInfoCPU(t *testing.T) {
 	}
 }
 
-func TestWillUseTUIRespectsQuietAndProgress(t *testing.T) {
+func TestWillUseTUIRespectsQuietAndConfig(t *testing.T) {
 	app := NewApplication(config.DefaultConfig(), "test", "test", "test")
 
-	if app.willUseTUI(false) {
-		t.Fatalf("willUseTUI should be false when showProgress is false")
+	// TUI is the default execution mode and does not depend on --progress
+	if !app.willUseTUI() && tuiShouldUseTUI() {
+		t.Fatalf("willUseTUI should default to true when TUI is enabled")
 	}
 
 	app.config.CLI.QuietMode = true
-	if app.willUseTUI(true) {
+	if app.willUseTUI() {
 		t.Fatalf("willUseTUI should be false when quiet mode is enabled")
 	}
 
 	app = NewApplication(config.DefaultConfig(), "test", "test", "test")
 	app.config.TUI.Enabled = false
-	if app.willUseTUI(true) {
+	if app.willUseTUI() {
 		t.Fatalf("willUseTUI should be false when TUI is disabled in config")
 	}
+}
+
+// tuiShouldUseTUI reports whether the environment supports the TUI, so the
+// default-true assertion above is skipped on non-interactive runners.
+func tuiShouldUseTUI() bool {
+	return tui.NewTUIManager().ShouldUseTUI()
 }

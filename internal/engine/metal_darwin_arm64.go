@@ -46,6 +46,16 @@ static int metal_available(void) {
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLComputePipelineState> pipeline;
 @property(nonatomic, strong) id<MTLCommandQueue> queue;
+@property(nonatomic, strong) id<MTLBuffer> private_key_buffer;
+@property(nonatomic, strong) id<MTLBuffer> prefix_buffer;
+@property(nonatomic, strong) id<MTLBuffer> suffix_buffer;
+@property(nonatomic, strong) id<MTLBuffer> match_index_buffer;
+@property(nonatomic, strong) id<MTLBuffer> match_count_buffer;
+@property(nonatomic, strong) id<MTLBuffer> comb_table_buffer;
+@property(nonatomic, assign) uint32_t private_key_capacity;
+@property(nonatomic, assign) uint32_t prefix_capacity;
+@property(nonatomic, assign) uint32_t suffix_capacity;
+@property(nonatomic, assign) uint32_t match_index_capacity;
 @end
 
 @implementation BlocoMetalMatchContext
@@ -72,120 +82,242 @@ static NSString* metal_match_source(void) {
 		"static inline ulong rotl64(ulong value, uchar shift) {\n"
 		"  return shift == 0 ? value : ((value << shift) | (value >> (64 - shift)));\n"
 		"}\n"
-		"constant uint FE_P[16] = { 0xfc2f, 0xffff, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff };\n"
-		"constant uint FE_PM2[16] = { 0xfc2d, 0xffff, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff };\n"
-		"constant uint SECP_GX[16] = { 0x1798, 0x16f8, 0x815b, 0x59f2, 0x28d9, 0x2dce, 0xfcdb, 0x029b, 0x0b07, 0xce87, 0x6295, 0x55a0, 0xbbac, 0xf9dc, 0x667e, 0x79be };\n"
-		"constant uint SECP_GY[16] = { 0xd4b8, 0xfb10, 0xd08f, 0x9c47, 0x5419, 0xa685, 0xb448, 0xfd17, 0x08a8, 0x0e11, 0xfbfc, 0x5da4, 0xc465, 0x26a3, 0xda77, 0x483a };\n"
+		// ---- 4x64 field arithmetic for secp256k1 (p = 2^256 - 2^32 - 977) ----
 		"static inline ulong load64_le_thread(thread const uchar *bytes) {\n"
 		"  ulong value = 0;\n"
 		"  for (uint i = 0; i < 8; i++) { value |= ((ulong)bytes[i]) << (8 * i); }\n"
 		"  return value;\n"
 		"}\n"
-		"static inline void fe_zero(thread uint *r) { for (uint i = 0; i < 16; i++) { r[i] = 0; } }\n"
-		"static inline void fe_one(thread uint *r) { fe_zero(r); r[0] = 1; }\n"
-		"static inline void fe_copy(thread uint *r, thread const uint *a) { for (uint i = 0; i < 16; i++) { r[i] = a[i]; } }\n"
-		"static inline bool fe_is_zero(thread const uint *a) { for (uint i = 0; i < 16; i++) { if (a[i] != 0) { return false; } } return true; }\n"
-		"static inline bool fe_is_one(thread const uint *a) { if (a[0] != 1) { return false; } for (uint i = 1; i < 16; i++) { if (a[i] != 0) { return false; } } return true; }\n"
-		"static inline int fe_cmp_p(thread const uint *a) {\n"
-		"  for (int i = 15; i >= 0; i--) { if (a[i] > FE_P[i]) { return 1; } if (a[i] < FE_P[i]) { return -1; } }\n"
-		"  return 0;\n"
-		"}\n"
-		"static inline void fe_sub_p(thread uint *a) {\n"
-		"  uint borrow = 0;\n"
-		"  for (uint i = 0; i < 16; i++) {\n"
-		"    uint bi = FE_P[i] + borrow;\n"
-		"    if (a[i] >= bi) { a[i] = a[i] - bi; borrow = 0; } else { a[i] = (uint)(0x10000u + a[i] - bi); borrow = 1; }\n"
+		"constant ulong SECP_P0 = 0xFFFFFFFEFFFFFC2FUL;\n"
+		"constant ulong SECP_P1 = 0xFFFFFFFFFFFFFFFFUL;\n"
+		"constant ulong SECP_P2 = 0xFFFFFFFFFFFFFFFFUL;\n"
+		"constant ulong SECP_P3 = 0xFFFFFFFFFFFFFFFFUL;\n"
+		"constant ulong SECP_C977 = 0x3D1UL;\n"
+		"constant ulong SECP_PM2_0 = 0xFFFFFFFEFFFFFC2DUL;\n"
+		"constant ulong SECP_PM2_1 = 0xFFFFFFFFFFFFFFFFUL;\n"
+		"constant ulong SECP_PM2_2 = 0xFFFFFFFFFFFFFFFFUL;\n"
+		"constant ulong SECP_PM2_3 = 0xFFFFFFFFFFFFFFFFUL;\n"
+		"static inline void fe_zero(thread ulong *r) { r[0] = 0; r[1] = 0; r[2] = 0; r[3] = 0; }\n"
+		"static inline void fe_one(thread ulong *r) { fe_zero(r); r[0] = 1; }\n"
+		"static inline void fe_copy(thread ulong *r, thread const ulong *a) { r[0] = a[0]; r[1] = a[1]; r[2] = a[2]; r[3] = a[3]; }\n"
+		"static inline bool fe_is_zero(thread const ulong *a) { return a[0] == 0 && a[1] == 0 && a[2] == 0 && a[3] == 0; }\n"
+		"static inline bool fe_is_one(thread const ulong *a) { return a[0] == 1 && a[1] == 0 && a[2] == 0 && a[3] == 0; }\n"
+		// Addition mod p: exact (a + b < 2p, so a single 2^256 wrap is fixed
+		// by adding back c = 2^32 + 977).
+		"static inline void fe_add(thread ulong *r, thread const ulong *a, thread const ulong *b) {\n"
+		"  ulong s0 = a[0] + b[0]; ulong c = (s0 < a[0]) ? 1 : 0;\n"
+		"  ulong s1 = a[1] + b[1]; ulong c1 = (s1 < a[1]) ? 1 : 0; s1 += c; c1 += (s1 < c) ? 1 : 0;\n"
+		"  ulong s2 = a[2] + b[2]; ulong c2 = (s2 < a[2]) ? 1 : 0; s2 += c1; c2 += (s2 < c1) ? 1 : 0;\n"
+		"  ulong s3 = a[3] + b[3]; ulong w = (s3 < a[3]) ? 1 : 0; s3 += c2; w += (s3 < c2) ? 1 : 0;\n"
+		"  if (w != 0) {\n"
+		"    // wrapped past 2^256: add back c = 2^32 + 977 (2^256 mod p).\n"
+		"    // Both terms fit in limb 0; the final carry is provably zero\n"
+		"    // because a + b < 2p, so s + c = a + b - p < p < 2^256.\n"
+		"    s0 += SECP_C977; ulong c0 = (s0 < SECP_C977) ? 1 : 0;\n"
+		"    s0 += 0x100000000UL; c0 += (s0 < 0x100000000UL) ? 1 : 0;\n"
+		"    ulong s1b = s1 + c0; ulong c1b = (s1b < c0) ? 1 : 0; s1 = s1b;\n"
+		"    ulong s2b = s2 + c1b; ulong c2b = (s2b < c1b) ? 1 : 0; s2 = s2b;\n"
+		"    s3 += c2b;\n"
 		"  }\n"
+		"  r[0] = s0; r[1] = s1; r[2] = s2; r[3] = s3;\n"
 		"}\n"
-		"static inline void normalize_limbs(thread ulong *v, uint n) {\n"
-		"  for (uint i = 0; i + 1 < n; i++) { v[i + 1] += v[i] >> 16; v[i] &= 0xffffUL; }\n"
-		"}\n"
-		"static inline void fe_reduce(thread uint *r, thread ulong *t) {\n"
-		"  normalize_limbs(t, 32);\n"
-		"  ulong acc[22];\n"
-		"  for (uint i = 0; i < 22; i++) { acc[i] = 0; }\n"
-		"  for (uint i = 0; i < 16; i++) { acc[i] = t[i]; }\n"
-		"  for (uint i = 0; i < 16; i++) { ulong h = t[i + 16]; acc[i] += h * 977UL; acc[i + 2] += h; }\n"
-		"  for (uint pass = 0; pass < 4; pass++) {\n"
-		"    normalize_limbs(acc, 22);\n"
-		"    for (uint k = 16; k < 22; k++) { ulong h = acc[k]; acc[k] = 0; acc[k - 16] += h * 977UL; acc[k - 14] += h; }\n"
+		// Subtraction mod p: exact (adds p back when a < b).
+		"static inline void fe_sub(thread ulong *r, thread const ulong *a, thread const ulong *b) {\n"
+		"  ulong d0 = a[0] - b[0]; bool br = a[0] < b[0];\n"
+		"  ulong d1 = a[1] - b[1] - (br ? 1 : 0); bool br1 = br ? (a[1] <= b[1]) : (a[1] < b[1]);\n"
+		"  ulong d2 = a[2] - b[2] - (br1 ? 1 : 0); bool br2 = br1 ? (a[2] <= b[2]) : (a[2] < b[2]);\n"
+		"  ulong d3 = a[3] - b[3] - (br2 ? 1 : 0); bool br3 = br2 ? (a[3] <= b[3]) : (a[3] < b[3]);\n"
+		"  if (br3) {\n"
+		"    d0 += SECP_P0; ulong c = (d0 < SECP_P0) ? 1 : 0;\n"
+		"    ulong t1 = d1 + SECP_P1; ulong c1 = (t1 < SECP_P1) ? 1 : 0; t1 += c; c1 += (t1 < c) ? 1 : 0; d1 = t1;\n"
+		"    ulong t2 = d2 + SECP_P2; ulong c2 = (t2 < SECP_P2) ? 1 : 0; t2 += c1; c2 += (t2 < c1) ? 1 : 0; d2 = t2;\n"
+		"    d3 += SECP_P3 + c2;\n"
 		"  }\n"
-		"  normalize_limbs(acc, 22);\n"
-		"  for (uint i = 0; i < 16; i++) { r[i] = (uint)(acc[i] & 0xffffUL); }\n"
-		"  for (uint i = 0; i < 4; i++) { if (fe_cmp_p(r) >= 0) { fe_sub_p(r); } }\n"
+		"  r[0] = d0; r[1] = d1; r[2] = d2; r[3] = d3;\n"
 		"}\n"
-		"static inline void fe_add(thread uint *r, thread const uint *a, thread const uint *b) {\n"
-		"  ulong t[32];\n"
-		"  for (uint i = 0; i < 32; i++) { t[i] = 0; }\n"
-		"  for (uint i = 0; i < 16; i++) { t[i] = (ulong)a[i] + (ulong)b[i]; }\n"
+		// Modular reduction of an 8-limb product into 4 limbs, folding the
+		// top limbs with c = 2^32 + 977 until only a tiny overflow remains,
+		// then conditional subtraction of p.
+		"static inline void fe_reduce(thread ulong *r, thread const ulong *t) {\n"
+		"  ulong a0 = t[0]; ulong a1 = t[1]; ulong a2 = t[2]; ulong a3 = t[3];\n"
+		"  ulong ov0 = t[4]; ulong ov1 = t[5]; ulong ov2 = t[6]; ulong ov3 = t[7];\n"
+		"  // Fold pass 1: full 4-limb overflow * c, exact into a[0..4].\n"
+		"  ulong a4 = 0;\n"
+		"  for (uint k = 0; k < 4; k++) {\n"
+		"    ulong x = (k == 0) ? ov0 : (k == 1) ? ov1 : (k == 2) ? ov2 : ov3;\n"
+		"    ulong mlo = x * SECP_C977;\n"
+		"    ulong mhi = mulhi(x, SECP_C977);\n"
+		"    ulong sh = x << 32;\n"
+		"    ulong shh = x >> 32;\n"
+		"    ulong v = (k == 0) ? a0 : (k == 1) ? a1 : (k == 2) ? a2 : a3;\n"
+		"    ulong s = v + mlo; ulong c = (s < mlo) ? 1 : 0; v = s;\n"
+		"    s = v + sh; c += (s < sh) ? 1 : 0; v = s;\n"
+		"    if (k == 0) { a0 = v; } else if (k == 1) { a1 = v; } else if (k == 2) { a2 = v; } else { a3 = v; }\n"
+		"    ulong w = (k == 0) ? a1 : (k == 1) ? a2 : (k == 2) ? a3 : a4;\n"
+		"    ulong s1 = w + mhi; ulong c1 = (s1 < mhi) ? 1 : 0; w = s1;\n"
+		"    s1 = w + shh; c1 += (s1 < shh) ? 1 : 0; w = s1;\n"
+		"    s1 = w + c; c1 += (s1 < c) ? 1 : 0; w = s1;\n"
+		"    if (k == 0) { a1 = w; } else if (k == 1) { a2 = w; } else if (k == 2) { a3 = w; } else { a4 = w; }\n"
+		"    if (c1 != 0) {\n"
+		"      if (k == 0) { a2 += c1; if (a2 < c1) { a3 += 1; if (a3 == 0) { a4 += 1; } } }\n"
+		"      else if (k == 1) { a3 += c1; if (a3 < c1) { a4 += 1; } }\n"
+		"      else if (k == 2) { a4 += c1; }\n"
+		"      // k == 3: c1 would land in a[5]; the total is < 2^289 so it is zero.\n"
+		"    }\n"
+		"  }\n"
+		"  // Fold passes 2-4: 1-limb overflow (a4) * c with full carry capture.\n"
+		"  for (uint pass = 1; pass < 4; pass++) {\n"
+		"    if (a4 == 0) { break; }\n"
+		"    ulong x = a4;\n"
+		"    ulong mlo = x * SECP_C977;\n"
+		"    ulong mhi = mulhi(x, SECP_C977);\n"
+		"    ulong sh = x << 32;\n"
+		"    ulong shh = x >> 32;\n"
+		"    ulong s = a0 + mlo; ulong c = (s < mlo) ? 1 : 0; a0 = s;\n"
+		"    s = a0 + sh; c += (s < sh) ? 1 : 0; a0 = s;\n"
+		"    ulong s1 = a1 + mhi; ulong c1 = (s1 < mhi) ? 1 : 0; s1 += shh; c1 += (s1 < shh) ? 1 : 0; s1 += c; c1 += (s1 < c) ? 1 : 0; a1 = s1;\n"
+		"    ulong s2 = a2 + c1; ulong c2 = (s2 < c1) ? 1 : 0; a2 = s2;\n"
+		"    ulong s3 = a3 + c2; ulong c3 = (s3 < c2) ? 1 : 0; a3 = s3;\n"
+		"    a4 = c3;\n"
+		"  }\n"
+		"  // Value is now < 2^256 + c (exact mod p); normalize with conditional\n"
+		"  // subtractions of p (two passes cover the residual excess).\n"
+		"  for (uint pass = 0; pass < 2; pass++) {\n"
+		"    bool ge = a3 > SECP_P3;\n"
+		"    if (!ge && a3 == SECP_P3) {\n"
+		"      if (a2 > SECP_P2) { ge = true; }\n"
+		"      else if (a2 == SECP_P2) {\n"
+		"        if (a1 > SECP_P1) { ge = true; }\n"
+		"        else if (a1 == SECP_P1) { ge = a0 >= SECP_P0; }\n"
+		"      }\n"
+		"    }\n"
+		"    if (!ge) { break; }\n"
+		"    ulong d0 = a0 - SECP_P0; bool br = a0 < SECP_P0;\n"
+		"    ulong d1 = a1 + 1 - (br ? 1 : 0); bool br1 = (a1 != SECP_P1) || (br && a1 == SECP_P1);\n"
+		"    ulong d2 = a2 + 1 - (br1 ? 1 : 0); bool br2 = (a2 != SECP_P2) || (br1 && a2 == SECP_P2);\n"
+		"    ulong d3 = a3 + 1 - (br2 ? 1 : 0);\n"
+		"    a0 = d0; a1 = d1; a2 = d2; a3 = d3;\n"
+		"  }\n"
+		"  r[0] = a0; r[1] = a1; r[2] = a2; r[3] = a3;\n"
+		"}\n"
+		// Schoolbook 4x4 multiplication into 8 limbs with full carry
+		// propagation. The total product is < 2^512, so the carry chain from
+		// t[k+2] can only reach the top of the array.
+		"static inline void fe_mul(thread ulong *r, thread const ulong *a, thread const ulong *b) {\n"
+		"  ulong t[8];\n"
+		"  for (uint i = 0; i < 8; i++) { t[i] = 0; }\n"
+		"  for (uint i = 0; i < 4; i++) {\n"
+		"    for (uint j = 0; j < 4; j++) {\n"
+		"      ulong mlo = a[i] * b[j];\n"
+		"      ulong mhi = mulhi(a[i], b[j]);\n"
+		"      uint k = i + j;\n"
+		"      ulong s = t[k] + mlo; ulong c = (s < mlo) ? 1 : 0; t[k] = s;\n"
+		"      ulong s1 = t[k + 1] + mhi; ulong c1 = (s1 < t[k + 1]) ? 1 : 0; s1 += c; c1 += (s1 < c) ? 1 : 0; t[k + 1] = s1;\n"
+		"      if (k + 2 < 8) {\n"
+		"        ulong carry = c1;\n"
+		"        uint idx = k + 2;\n"
+		"        while (carry != 0 && idx < 8) {\n"
+		"          t[idx] += carry;\n"
+		"          carry = (t[idx] < carry) ? 1 : 0;\n"
+		"          idx++;\n"
+		"        }\n"
+		"      }\n"
+		"    }\n"
+		"  }\n"
 		"  fe_reduce(r, t);\n"
 		"}\n"
-		"static inline void fe_sub(thread uint *r, thread const uint *a, thread const uint *b) {\n"
-		"  uint borrow = 0;\n"
-		"  for (uint i = 0; i < 16; i++) {\n"
-		"    uint bi = b[i] + borrow;\n"
-		"    if (a[i] >= bi) { r[i] = a[i] - bi; borrow = 0; } else { r[i] = (uint)(0x10000u + a[i] - bi); borrow = 1; }\n"
-		"  }\n"
-		"  if (borrow != 0) {\n"
-		"    uint sub = 977;\n"
-		"    for (uint i = 0; i < 16 && sub != 0; i++) { if (r[i] >= sub) { r[i] -= sub; sub = 0; } else { r[i] = (uint)(0x10000u + r[i] - sub); sub = 1; } }\n"
-		"    sub = 1;\n"
-		"    for (uint i = 2; i < 16 && sub != 0; i++) { if (r[i] >= sub) { r[i] -= sub; sub = 0; } else { r[i] = (uint)(0x10000u + r[i] - sub); sub = 1; } }\n"
-		"  }\n"
-		"}\n"
-		"static inline void fe_mul_small(thread uint *r, thread const uint *a, uint m) {\n"
-		"  ulong t[32];\n"
-		"  for (uint i = 0; i < 32; i++) { t[i] = 0; }\n"
-		"  for (uint i = 0; i < 16; i++) { t[i] = (ulong)a[i] * (ulong)m; }\n"
-		"  fe_reduce(r, t);\n"
-		"}\n"
-		"static inline void fe_mul(thread uint *r, thread const uint *a, thread const uint *b) {\n"
-		"  ulong t[32];\n"
-		"  for (uint i = 0; i < 32; i++) { t[i] = 0; }\n"
-		"  for (uint i = 0; i < 16; i++) { for (uint j = 0; j < 16; j++) { t[i + j] += (ulong)a[i] * (ulong)b[j]; } }\n"
-		"  fe_reduce(r, t);\n"
-		"}\n"
-		"static inline void fe_sqr(thread uint *r, thread const uint *a) { fe_mul(r, a, a); }\n"
-		"static inline bool exp_pm2_bit(uint bit) { return ((FE_PM2[bit >> 4] >> (bit & 15)) & 1u) != 0; }\n"
-		"static inline void fe_inv(thread uint *r, thread const uint *a) {\n"
-		"  uint result[16]; uint base[16]; uint tmp[16];\n"
+		"static inline void fe_sqr(thread ulong *r, thread const ulong *a) { fe_mul(r, a, a); }\n"
+		// Fermat inversion via exponentiation by p - 2.
+		"static inline void fe_inv(thread ulong *r, thread const ulong *a) {\n"
+		"  ulong result[4]; ulong base[4]; ulong tmp[4];\n"
 		"  fe_one(result); fe_copy(base, a);\n"
-		"  for (int bit = 255; bit >= 0; bit--) { fe_sqr(tmp, result); fe_copy(result, tmp); if (exp_pm2_bit((uint)bit)) { fe_mul(tmp, result, base); fe_copy(result, tmp); } }\n"
+		"  for (uint bit = 256; bit-- > 0; ) {\n"
+		"    uint b = bit;\n"
+		"    fe_sqr(tmp, result); fe_copy(result, tmp);\n"
+		"    uint limb = b >> 6;\n"
+		"    ulong pm2 = (limb == 0) ? SECP_PM2_0 : (limb == 1) ? SECP_PM2_1 : (limb == 2) ? SECP_PM2_2 : SECP_PM2_3;\n"
+		"    if (((pm2 >> (b & 63)) & 1UL) != 0) { fe_mul(tmp, result, base); fe_copy(result, tmp); }\n"
+		"  }\n"
 		"  fe_copy(r, result);\n"
 		"}\n"
-		"static inline void load_g(thread uint *gx, thread uint *gy) { for (uint i = 0; i < 16; i++) { gx[i] = SECP_GX[i]; gy[i] = SECP_GY[i]; } }\n"
-		"static inline void point_set_g(thread uint *x, thread uint *y, thread uint *z, thread bool &inf) { load_g(x, y); fe_one(z); inf = false; }\n"
-		"static inline void point_double(thread uint *x, thread uint *y, thread uint *z, thread bool &inf) {\n"
-		"  if (inf || fe_is_zero(y)) { inf = true; return; }\n"
-		"  uint A[16]; uint B[16]; uint C[16]; uint D[16]; uint E[16]; uint F[16]; uint T[16]; uint X3[16]; uint Y3[16]; uint Z3[16];\n"
-		"  fe_sqr(A, x); fe_sqr(B, y); fe_sqr(C, B);\n"
-		"  fe_add(T, x, B); fe_sqr(T, T); fe_sub(T, T, A); fe_sub(T, T, C); fe_mul_small(D, T, 2);\n"
-		"  fe_mul_small(E, A, 3); fe_sqr(F, E); fe_mul_small(T, D, 2); fe_sub(X3, F, T);\n"
-		"  fe_sub(T, D, X3); fe_mul(Y3, E, T); fe_mul_small(T, C, 8); fe_sub(Y3, Y3, T);\n"
-		"  fe_mul(T, y, z); fe_mul_small(Z3, T, 2);\n"
-		"  fe_copy(x, X3); fe_copy(y, Y3); fe_copy(z, Z3); inf = false;\n"
+		// Jacobian point addition (add-2007-bl). Inputs may alias the output.
+		"static inline void jacobian_add(thread ulong *x3, thread ulong *y3, thread ulong *z3, thread const ulong *x1, thread const ulong *y1, thread const ulong *z1, thread const ulong *x2, thread const ulong *y2, thread const ulong *z2) {\n"
+		"  if (fe_is_zero(z1)) { fe_copy(x3, x2); fe_copy(y3, y2); fe_copy(z3, z2); return; }\n"
+		"  if (fe_is_zero(z2)) { fe_copy(x3, x1); fe_copy(y3, y1); fe_copy(z3, z1); return; }\n"
+		"  ulong z1z1[4]; ulong z2z2[4]; ulong u1[4]; ulong u2[4]; ulong s1[4]; ulong s2[4];\n"
+		"  ulong h[4]; ulong ii[4]; ulong jj[4]; ulong rr[4]; ulong v[4]; ulong t[4];\n"
+		"  ulong nx[4]; ulong ny[4]; ulong nz[4];\n"
+		"  fe_sqr(z1z1, z1); fe_sqr(z2z2, z2);\n"
+		"  fe_mul(u1, x1, z2z2); fe_mul(u2, x2, z1z1);\n"
+		"  fe_mul(s1, y1, z2); fe_mul(s1, s1, z2z2);\n"
+		"  fe_mul(s2, y2, z1); fe_mul(s2, s2, z1z1);\n"
+		"  fe_sub(h, u2, u1);\n"
+		"  if (fe_is_zero(h)) {\n"
+		"    fe_sub(t, s2, s1);\n"
+		"    if (fe_is_zero(t)) {\n"
+		"      // P == Q: point doubling.\n"
+		"      ulong a[4]; ulong b[4]; ulong c[4]; ulong d[4]; ulong e[4]; ulong f[4];\n"
+		"      fe_sqr(a, x1); fe_sqr(b, y1); fe_sqr(c, b);\n"
+		"      fe_add(t, x1, b); fe_sqr(t, t); fe_sub(t, t, a); fe_sub(t, t, c); fe_add(d, t, t);\n"
+		"      fe_add(t, a, a); fe_add(e, t, a); fe_sqr(f, e);\n"
+		"      fe_add(t, d, d); fe_sub(nx, f, t);\n"
+		"      fe_sub(t, d, nx); fe_mul(ny, e, t); fe_add(t, c, c); fe_add(t, t, t); fe_add(t, t, t); fe_sub(ny, ny, t);\n"
+		"      fe_mul(t, y1, z1); fe_add(nz, t, t);\n"
+		"    } else {\n"
+		"      fe_zero(x3); fe_zero(y3); fe_zero(z3);\n"
+		"      return;\n"
+		"    }\n"
+		"  } else {\n"
+		"    fe_add(t, h, h); fe_sqr(ii, t);\n"
+		"    fe_mul(jj, h, ii);\n"
+		"    fe_sub(t, s2, s1); fe_add(rr, t, t);\n"
+		"    fe_mul(v, u1, ii);\n"
+		"    fe_sqr(t, rr); fe_sub(nx, t, jj); fe_add(t, v, v); fe_sub(nx, nx, t);\n"
+		"    fe_sub(t, v, nx); fe_mul(t, rr, t); fe_mul(ny, s1, jj); fe_add(ny, ny, ny); fe_sub(ny, t, ny);\n"
+		"    fe_add(t, z1, z2); fe_sqr(t, t); fe_sub(t, t, z1z1); fe_sub(t, t, z2z2); fe_mul(nz, t, h);\n"
+		"  }\n"
+		"  fe_copy(x3, nx); fe_copy(y3, ny); fe_copy(z3, nz);\n"
 		"}\n"
-		"static inline void point_add_g(thread uint *x, thread uint *y, thread uint *z, thread bool &inf) {\n"
-		"  uint gx[16]; uint gy[16]; load_g(gx, gy);\n"
-		"  if (inf) { fe_copy(x, gx); fe_copy(y, gy); fe_one(z); inf = false; return; }\n"
-		"  uint Z1Z1[16]; uint U2[16]; uint S2[16]; uint H[16]; uint HH[16]; uint I[16]; uint J[16]; uint R[16]; uint V[16]; uint T[16]; uint X3[16]; uint Y3[16]; uint Z3[16];\n"
-		"  fe_sqr(Z1Z1, z); fe_mul(U2, gx, Z1Z1); fe_mul(S2, z, Z1Z1); fe_mul(S2, gy, S2);\n"
-		"  fe_sub(H, U2, x); fe_sub(R, S2, y);\n"
-		"  if (fe_is_zero(H)) { if (fe_is_zero(R)) { point_double(x, y, z, inf); } else { inf = true; } return; }\n"
-		"  fe_sqr(HH, H); fe_mul_small(I, HH, 4); fe_mul(J, H, I); fe_mul_small(R, R, 2); fe_mul(V, x, I);\n"
-		"  fe_sqr(X3, R); fe_sub(X3, X3, J); fe_mul_small(T, V, 2); fe_sub(X3, X3, T);\n"
-		"  fe_sub(T, V, X3); fe_mul(Y3, R, T); fe_mul(T, y, J); fe_mul_small(T, T, 2); fe_sub(Y3, Y3, T);\n"
-		"  fe_add(T, z, H); fe_sqr(Z3, T); fe_sub(Z3, Z3, Z1Z1); fe_sub(Z3, Z3, HH);\n"
-		"  fe_copy(x, X3); fe_copy(y, Y3); fe_copy(z, Z3); inf = false;\n"
+		// Fixed-base comb: table[window 0..63][entry 0..15] holds the Jacobian
+		// point (entry * 2^(4*window)) * G with Z = 1 (entry 0 is infinity).
+		"constant uint COMB_WINDOWS = 64;\n"
+		"constant uint COMB_ENTRIES = 16;\n"
+		"static inline uint scalar_window_thread(thread const uchar *scalar, uint w) {\n"
+		"  uint bit = w * 4;\n"
+		"  uint byte_id = 31 - (bit >> 3);\n"
+		"  uint shift = bit & 7;\n"
+		"  uint value = (uint)scalar[byte_id] >> shift;\n"
+		"  if (shift > 4) { value |= ((uint)scalar[byte_id - 1]) << (8 - shift); }\n"
+		"  return value & 0x0f;\n"
 		"}\n"
-		"static inline bool scalar_bit(device const uchar *scalar, uint bit) { return ((scalar[31 - (bit >> 3)] >> (bit & 7)) & 1u) != 0; }\n"
-		"static inline void store_fe_be(thread uchar *out, uint offset, thread const uint *a) { for (uint i = 0; i < 16; i++) { uint limb = a[15 - i]; out[offset + i * 2] = (uchar)(limb >> 8); out[offset + i * 2 + 1] = (uchar)(limb & 0xff); } }\n"
-		"static inline void secp256k1_public_key(device const uchar *private_key, thread uchar *public_key) {\n"
-		"  uint x[16]; uint y[16]; uint z[16]; bool inf = true;\n"
-		"  for (int bit = 255; bit >= 0; bit--) { if (!inf) { point_double(x, y, z, inf); } if (scalar_bit(private_key, (uint)bit)) { point_add_g(x, y, z, inf); } }\n"
-		"  if (inf) { for (uint i = 0; i < 64; i++) { public_key[i] = 0; } return; }\n"
-		"  if (fe_is_one(z)) { store_fe_be(public_key, 0, x); store_fe_be(public_key, 32, y); return; }\n"
-		"  uint zinv[16]; uint z2[16]; uint z3[16];\n"
+		"static inline uint scalar_window(device const uchar *scalar, uint w) {\n"
+		"  uint bit = w * 4;\n"
+		"  uint byte_id = 31 - (bit >> 3);\n"
+		"  uint shift = bit & 7;\n"
+		"  uint value = (uint)scalar[byte_id] >> shift;\n"
+		"  if (shift > 4) { value |= ((uint)scalar[byte_id - 1]) << (8 - shift); }\n"
+		"  return value & 0x0f;\n"
+		"}\n"
+		"static inline void comb_load(thread ulong *x, thread ulong *y, thread ulong *z, device const ulong *table, uint w, uint j) {\n"
+		"  uint base = (w * COMB_ENTRIES + j) * 12;\n"
+		"  for (uint i = 0; i < 4; i++) { x[i] = table[base + i]; y[i] = table[base + 4 + i]; z[i] = table[base + 8 + i]; }\n"
+		"}\n"
+		"static inline void store_fe_be(thread uchar *out, uint offset, thread const ulong *a) {\n"
+		"  for (uint i = 0; i < 4; i++) { ulong limb = a[3 - i]; for (uint j = 0; j < 8; j++) { out[offset + i * 8 + j] = (uchar)(limb >> (56 - 8 * j)); } }\n"
+		"}\n"
+		"static inline void store_fe_be(device uchar *out, uint offset, thread const ulong *a) {\n"
+		"  for (uint i = 0; i < 4; i++) { ulong limb = a[3 - i]; for (uint j = 0; j < 8; j++) { out[offset + i * 8 + j] = (uchar)(limb >> (56 - 8 * j)); } }\n"
+		"}\n"
+		"static inline void secp256k1_public_key(device const uchar *private_key, device const ulong *table, thread uchar *public_key) {\n"
+		"  ulong x[4]; ulong y[4]; ulong z[4];\n"
+		"  comb_load(x, y, z, table, 63, scalar_window(private_key, 63));\n"
+		"  for (int w = 62; w >= 0; w--) {\n"
+		"    ulong tx[4]; ulong ty[4]; ulong tz[4];\n"
+		"    comb_load(tx, ty, tz, table, (uint)w, scalar_window(private_key, (uint)w));\n"
+		"    jacobian_add(x, y, z, x, y, z, tx, ty, tz);\n"
+		"  }\n"
+		"  if (fe_is_zero(z)) { for (uint i = 0; i < 64; i++) { public_key[i] = 0; } return; }\n"
+		"  ulong zinv[4]; ulong z2[4]; ulong z3[4];\n"
 		"  fe_inv(zinv, z); fe_sqr(z2, zinv); fe_mul(z3, x, z2); store_fe_be(public_key, 0, z3); fe_mul(z3, z2, zinv); fe_mul(zinv, y, z3); store_fe_be(public_key, 32, zinv);\n"
 		"}\n"
 		"static inline uchar state_byte(thread const ulong *state, uint byte_id) {\n"
@@ -223,10 +355,10 @@ static NSString* metal_match_source(void) {
 		"  state[16] ^= 0x8000000000000000UL;\n"
 		"  keccakf(state);\n"
 		"}\n"
-		"kernel void count_matches(device const uchar *private_keys [[buffer(0)]], device const uchar *prefix [[buffer(1)]], device const uchar *suffix [[buffer(2)]], device atomic_uint *result [[buffer(3)]], constant uint &count [[buffer(4)]], constant uint &prefix_len [[buffer(5)]], constant uint &suffix_len [[buffer(6)]], uint id [[thread_position_in_grid]]) {\n"
+		"kernel void count_matches(device const uchar *private_keys [[buffer(0)]], device const uchar *prefix [[buffer(1)]], device const uchar *suffix [[buffer(2)]], device uint *match_indices [[buffer(3)]], device atomic_uint *match_count [[buffer(4)]], device const ulong *comb_table [[buffer(5)]], constant uint &count [[buffer(6)]], constant uint &prefix_len [[buffer(7)]], constant uint &suffix_len [[buffer(8)]], constant uint &max_matches [[buffer(9)]], uint id [[thread_position_in_grid]]) {\n"
 		"  if (id >= count) { return; }\n"
 		"  thread uchar public_key[64];\n"
-		"  secp256k1_public_key(private_keys + id * 32, public_key);\n"
+		"  secp256k1_public_key(private_keys + id * 32, comb_table, public_key);\n"
 		"  ulong state[25];\n"
 		"  keccak256_public_key(public_key, state);\n"
 		"  bool ok = true;\n"
@@ -236,11 +368,20 @@ static NSString* metal_match_source(void) {
 		"  for (uint i = 0; i < suffix_len; i++) {\n"
 		"    if (address_nibble(state, 40 - suffix_len + i) != suffix[i]) { ok = false; }\n"
 		"  }\n"
-		"  if (ok) { atomic_fetch_add_explicit(result, 1u, memory_order_relaxed); }\n"
+		"  if (ok) {\n"
+		"    uint slot = atomic_fetch_add_explicit(match_count, 1u, memory_order_relaxed);\n"
+		"    if (slot < max_matches) { match_indices[slot] = id; }\n"
+		"  }\n"
+		"}\n"
+		"kernel void dump_pubkeys(device const uchar *private_keys [[buffer(0)]], device const ulong *comb_table [[buffer(1)]], device uchar *pubkeys [[buffer(2)]], constant uint &count [[buffer(3)]], uint id [[thread_position_in_grid]]) {\n"
+		"  if (id >= count) { return; }\n"
+		"  thread uchar public_key[64];\n"
+		"  secp256k1_public_key(private_keys + id * 32, comb_table, public_key);\n"
+		"  for (uint i = 0; i < 64; i++) { pubkeys[id * 64 + i] = public_key[i]; }\n"
 		"}\n";
 }
 
-static void* metal_create_match_context(char **error_msg) {
+static void* metal_create_match_context(const uint8_t *comb_table, uint32_t comb_table_len, char **error_msg) {
 	@autoreleasepool {
 		id<MTLDevice> device = MTLCreateSystemDefaultDevice();
 		if (device == nil) {
@@ -272,10 +413,21 @@ static void* metal_create_match_context(char **error_msg) {
 			return NULL;
 		}
 
+		id<MTLBuffer> table_buffer = nil;
+		if (comb_table != NULL && comb_table_len > 0) {
+			table_buffer = [device newBufferWithLength:(NSUInteger)comb_table_len options:MTLResourceStorageModeShared];
+			if (table_buffer == nil) {
+				*error_msg = strdup("failed to allocate metal comb table buffer");
+				return NULL;
+			}
+			memcpy([table_buffer contents], comb_table, comb_table_len);
+		}
+
 		BlocoMetalMatchContext *context = [BlocoMetalMatchContext new];
 		context.device = device;
 		context.pipeline = pipeline;
 		context.queue = queue;
+		context.comb_table_buffer = table_buffer;
 		return (__bridge_retained void *)context;
 	}
 }
@@ -296,7 +448,17 @@ static char* metal_context_device_name(void *context_ptr) {
 	}
 }
 
-static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint32_t count, const uint8_t *prefix, uint32_t prefix_len, const uint8_t *suffix, uint32_t suffix_len, uint32_t *matches, double *buffer_ns, double *kernel_ns, char **error_msg) {
+// metal_ensure_buffer grows a pooled buffer to at least the requested length.
+// ARC releases the previous buffer when the strong property is reassigned.
+static id<MTLBuffer> metal_ensure_buffer(id<MTLDevice> device, id<MTLBuffer> buffer, NSUInteger length, uint32_t *capacity, uint32_t requested) {
+	if (buffer != nil && *capacity >= requested) {
+		return buffer;
+	}
+	*capacity = requested;
+	return [device newBufferWithLength:length options:MTLResourceStorageModeShared];
+}
+
+static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint32_t count, const uint8_t *prefix, uint32_t prefix_len, const uint8_t *suffix, uint32_t suffix_len, uint32_t *matches, uint32_t *match_indices, uint32_t max_matches, double *buffer_ns, double *kernel_ns, char **error_msg) {
 	@autoreleasepool {
 		if (context_ptr == NULL) {
 			*error_msg = strdup("metal context not initialized");
@@ -309,17 +471,32 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 
 		CFAbsoluteTime buffer_start = CFAbsoluteTimeGetCurrent();
 		NSUInteger private_key_byte_count = (NSUInteger)count * 32;
-		id<MTLBuffer> private_key_buffer = [device newBufferWithLength:private_key_byte_count options:MTLResourceStorageModeShared];
 		NSUInteger prefix_byte_count = prefix_len == 0 ? 1 : prefix_len;
-		id<MTLBuffer> prefix_buffer = [device newBufferWithLength:prefix_byte_count options:MTLResourceStorageModeShared];
 		NSUInteger suffix_byte_count = suffix_len == 0 ? 1 : suffix_len;
-		id<MTLBuffer> suffix_buffer = [device newBufferWithLength:suffix_byte_count options:MTLResourceStorageModeShared];
-		id<MTLBuffer> result_buffer = [device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
-		if (private_key_buffer == nil || prefix_buffer == nil || suffix_buffer == nil || result_buffer == nil) {
-			metal_zero_buffer(private_key_buffer);
-			metal_zero_buffer(prefix_buffer);
-			metal_zero_buffer(suffix_buffer);
-			metal_zero_buffer(result_buffer);
+		NSUInteger match_index_byte_count = (NSUInteger)max_matches * sizeof(uint32_t);
+
+		// Reuse pooled buffers, growing them only when a larger batch arrives.
+		uint32_t private_key_capacity = context.private_key_capacity;
+		uint32_t prefix_capacity = context.prefix_capacity;
+		uint32_t suffix_capacity = context.suffix_capacity;
+		uint32_t match_index_capacity = context.match_index_capacity;
+		context.private_key_buffer = metal_ensure_buffer(device, context.private_key_buffer, private_key_byte_count, &private_key_capacity, count);
+		context.prefix_buffer = metal_ensure_buffer(device, context.prefix_buffer, prefix_byte_count, &prefix_capacity, prefix_len == 0 ? 1 : prefix_len);
+		context.suffix_buffer = metal_ensure_buffer(device, context.suffix_buffer, suffix_byte_count, &suffix_capacity, suffix_len == 0 ? 1 : suffix_len);
+		context.match_index_buffer = metal_ensure_buffer(device, context.match_index_buffer, match_index_byte_count, &match_index_capacity, max_matches);
+		context.private_key_capacity = private_key_capacity;
+		context.prefix_capacity = prefix_capacity;
+		context.suffix_capacity = suffix_capacity;
+		context.match_index_capacity = match_index_capacity;
+		if (context.match_count_buffer == nil) {
+			context.match_count_buffer = [device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
+		}
+		id<MTLBuffer> private_key_buffer = context.private_key_buffer;
+		id<MTLBuffer> prefix_buffer = context.prefix_buffer;
+		id<MTLBuffer> suffix_buffer = context.suffix_buffer;
+		id<MTLBuffer> match_index_buffer = context.match_index_buffer;
+		id<MTLBuffer> match_count_buffer = context.match_count_buffer;
+		if (private_key_buffer == nil || prefix_buffer == nil || suffix_buffer == nil || match_index_buffer == nil || match_count_buffer == nil) {
 			*error_msg = strdup("failed to allocate metal buffers");
 			return 5;
 		}
@@ -331,17 +508,14 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 		if (suffix_len > 0) {
 			memcpy([suffix_buffer contents], suffix, suffix_len);
 		}
-		uint32_t *result_contents = (uint32_t *)[result_buffer contents];
-		*result_contents = 0;
+		uint32_t *match_count_contents = (uint32_t *)[match_count_buffer contents];
+		*match_count_contents = 0;
+		memset([match_index_buffer contents], 0, match_index_byte_count);
 		CFAbsoluteTime buffer_end = CFAbsoluteTimeGetCurrent();
 
 		id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
 		id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
 		if (command_buffer == nil || encoder == nil) {
-			metal_zero_buffer(private_key_buffer);
-			metal_zero_buffer(prefix_buffer);
-			metal_zero_buffer(suffix_buffer);
-			metal_zero_buffer(result_buffer);
 			*error_msg = strdup("failed to create metal command encoder");
 			return 7;
 		}
@@ -350,10 +524,13 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 		[encoder setBuffer:private_key_buffer offset:0 atIndex:0];
 		[encoder setBuffer:prefix_buffer offset:0 atIndex:1];
 		[encoder setBuffer:suffix_buffer offset:0 atIndex:2];
-		[encoder setBuffer:result_buffer offset:0 atIndex:3];
-		[encoder setBytes:&count length:sizeof(count) atIndex:4];
-		[encoder setBytes:&prefix_len length:sizeof(prefix_len) atIndex:5];
-		[encoder setBytes:&suffix_len length:sizeof(suffix_len) atIndex:6];
+		[encoder setBuffer:match_index_buffer offset:0 atIndex:3];
+		[encoder setBuffer:match_count_buffer offset:0 atIndex:4];
+		[encoder setBuffer:context.comb_table_buffer offset:0 atIndex:5];
+		[encoder setBytes:&count length:sizeof(count) atIndex:6];
+		[encoder setBytes:&prefix_len length:sizeof(prefix_len) atIndex:7];
+		[encoder setBytes:&suffix_len length:sizeof(suffix_len) atIndex:8];
+		[encoder setBytes:&max_matches length:sizeof(max_matches) atIndex:9];
 
 		NSUInteger width = (NSUInteger)count;
 		NSUInteger threadgroup_width = pipeline.maxTotalThreadsPerThreadgroup;
@@ -372,20 +549,85 @@ static int metal_run_match(void *context_ptr, const uint8_t *private_keys, uint3
 
 		if ([command_buffer status] == MTLCommandBufferStatusError) {
 			*error_msg = metal_copy_error([command_buffer error]);
-			metal_zero_buffer(private_key_buffer);
-			metal_zero_buffer(prefix_buffer);
-			metal_zero_buffer(suffix_buffer);
-			metal_zero_buffer(result_buffer);
 			return 8;
 		}
 
-		*matches = *result_contents;
+		*matches = *match_count_contents;
+		memcpy(match_indices, [match_index_buffer contents], match_index_byte_count);
 		metal_zero_buffer(private_key_buffer);
 		metal_zero_buffer(prefix_buffer);
 		metal_zero_buffer(suffix_buffer);
-		metal_zero_buffer(result_buffer);
 		*buffer_ns = (buffer_end - buffer_start) * 1000000000.0;
 		*kernel_ns = (end - start) * 1000000000.0;
+		return 0;
+	}
+}
+
+// metal_dump_pubkeys is a diagnostic helper used by tests to read the raw
+// public keys the kernel derives for a batch of private keys.
+static int metal_dump_pubkeys(const char *kernel_name, const uint8_t *comb_table, uint32_t comb_table_len, const uint8_t *private_keys, uint32_t count, uint32_t out_stride, uint8_t *out, char **error_msg) {
+	@autoreleasepool {
+		id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+		if (device == nil) {
+			*error_msg = strdup("metal device not available");
+			return 1;
+		}
+		NSError *error = nil;
+		id<MTLLibrary> library = [device newLibraryWithSource:metal_match_source() options:nil error:&error];
+		if (library == nil) {
+			*error_msg = metal_copy_error(error);
+			return 2;
+		}
+		NSString *name = [NSString stringWithUTF8String:kernel_name];
+		id<MTLFunction> function = [library newFunctionWithName:name];
+		if (function == nil) {
+			*error_msg = strdup("metal dump function not found");
+			return 3;
+		}
+		id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function error:&error];
+		if (pipeline == nil) {
+			*error_msg = metal_copy_error(error);
+			return 4;
+		}
+		id<MTLCommandQueue> queue = [device newCommandQueue];
+		if (queue == nil) {
+			*error_msg = strdup("failed to create metal command queue");
+			return 5;
+		}
+
+		id<MTLBuffer> key_buffer = [device newBufferWithLength:(NSUInteger)count * 32 options:MTLResourceStorageModeShared];
+		id<MTLBuffer> table_buffer = [device newBufferWithLength:(NSUInteger)comb_table_len options:MTLResourceStorageModeShared];
+		id<MTLBuffer> out_buffer = [device newBufferWithLength:(NSUInteger)count * out_stride options:MTLResourceStorageModeShared];
+		if (key_buffer == nil || table_buffer == nil || out_buffer == nil) {
+			*error_msg = strdup("failed to allocate dump buffers");
+			return 6;
+		}
+		memcpy([key_buffer contents], private_keys, (NSUInteger)count * 32);
+		memcpy([table_buffer contents], comb_table, comb_table_len);
+
+		id<MTLCommandBuffer> cb = [queue commandBuffer];
+		id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+		if (cb == nil || enc == nil) {
+			*error_msg = strdup("failed to create metal command encoder");
+			return 7;
+		}
+		[enc setComputePipelineState:pipeline];
+		[enc setBuffer:key_buffer offset:0 atIndex:0];
+		[enc setBuffer:table_buffer offset:0 atIndex:1];
+		[enc setBuffer:out_buffer offset:0 atIndex:2];
+		[enc setBytes:&count length:sizeof(count) atIndex:3];
+		NSUInteger width = (NSUInteger)count;
+		NSUInteger tg = pipeline.maxTotalThreadsPerThreadgroup;
+		if (tg > width) { tg = width; }
+		[enc dispatchThreads:MTLSizeMake(width, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+		[enc endEncoding];
+		[cb commit];
+		[cb waitUntilCompleted];
+		if ([cb status] == MTLCommandBufferStatusError) {
+			*error_msg = metal_copy_error([cb error]);
+			return 8;
+		}
+		memcpy(out, [out_buffer contents], (NSUInteger)count * out_stride);
 		return 0;
 	}
 }
@@ -395,13 +637,16 @@ import "C"
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"runtime"
 	"time"
 	"unsafe"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/sha3"
 
@@ -624,13 +869,13 @@ func (e *MetalEngine) GenerateWallet(ctx context.Context, options GenerationOpti
 		}
 		batchAttempts := int64(len(privateKeys) / 32)
 
-		gpuMatches, _, _, err := runMetalMatch(e.context, privateKeys, prefixNibbles, suffixNibbles)
+		gpuMatches, matchIndices, _, _, err := runMetalMatch(e.context, privateKeys, prefixNibbles, suffixNibbles)
 		if err != nil {
 			zeroBytes(privateKeys)
 			return nil, err
 		}
 
-		candidate, err := findValidatedMetalGenerationCandidate(privateKeys, prefixNibbles, suffixNibbles, gpuMatches, options.Criteria, validationMode)
+		candidate, err := findValidatedMetalGenerationCandidate(privateKeys, prefixNibbles, suffixNibbles, gpuMatches, matchIndices, options.Criteria, validationMode)
 		zeroBytes(privateKeys)
 		if err != nil {
 			zeroBytes(candidate.PrivateKey[:])
@@ -736,7 +981,11 @@ func (e *MetalEngine) buildHybridBenchmarkResult(options BenchmarkOptions, batch
 
 func newMetalMatchContext() (unsafe.Pointer, error) {
 	var errorMsg *C.char
-	context := C.metal_create_match_context(&errorMsg)
+	table, err := buildMetalCombTable()
+	if err != nil {
+		return nil, err
+	}
+	context := C.metal_create_match_context((*C.uint8_t)(unsafe.Pointer(&table[0])), C.uint32_t(len(table)), &errorMsg)
 	if errorMsg != nil {
 		defer C.free(unsafe.Pointer(errorMsg))
 	}
@@ -747,6 +996,79 @@ func newMetalMatchContext() (unsafe.Pointer, error) {
 		return nil, fmt.Errorf("failed to initialize metal context")
 	}
 	return context, nil
+}
+
+// metalCombTableSize is 64 windows x 16 entries x (X, Y, Z) x 4 limbs of
+// uint64 in little-endian byte order.
+const metalCombTableSize = 64 * 16 * 3 * 4 * 8
+
+// buildMetalCombTable precomputes the fixed-base comb table used by the Metal
+// kernel: entry [w][j] is the Jacobian point (j * 2^(4w)) * G with Z = 1
+// (except j == 0, which is the point at infinity with Z = 0).
+func buildMetalCombTable() ([]byte, error) {
+	table := make([]byte, metalCombTableSize)
+	order := secp256k1.S256().Params().N
+	for w := 0; w < 64; w++ {
+		for j := 0; j < 16; j++ {
+			s := new(big.Int).Lsh(big.NewInt(int64(j)), uint(4*w))
+			s.Mod(s, order)
+			base := (w*16 + j) * 12 // ulong units (3 coords x 4 limbs)
+			if s.Sign() == 0 {
+				// point at infinity: X = Y = Z = 0
+				continue
+			}
+			var kBytes [32]byte
+			s.FillBytes(kBytes[:])
+			var kScalar secp256k1.ModNScalar
+			kScalar.SetByteSlice(kBytes[:])
+			var point secp256k1.JacobianPoint
+			secp256k1.ScalarBaseMultNonConst(&kScalar, &point)
+			point.ToAffine()
+			point.Z.SetInt(1)
+			writeCombField(table, base*8, &point.X)
+			writeCombField(table, (base+4)*8, &point.Y)
+			writeCombField(table, (base+8)*8, &point.Z)
+		}
+	}
+	return table, nil
+}
+
+// writeCombField serializes a field value as 4 little-endian 64-bit limbs,
+// matching the kernel's fe representation: limb[i] holds bits [64i, 64i+64).
+func writeCombField(out []byte, offset int, value *secp256k1.FieldVal) {
+	bytes := value.Bytes() // 32-byte big-endian
+	for i := 0; i < 4; i++ {
+		limb := binary.BigEndian.Uint64(bytes[24-8*i : 32-8*i])
+		binary.LittleEndian.PutUint64(out[offset+i*8:], limb)
+	}
+}
+
+// dumpMetalPubkeys is a diagnostic helper used by tests to read the raw
+// public keys the kernel derives for a batch of private keys.
+func dumpMetalPubkeys(table []byte, privateKeys []byte) ([]byte, error) {
+	return dumpMetalKernel("dump_pubkeys", table, privateKeys, 64)
+}
+
+func dumpMetalKernel(kernelName string, table []byte, privateKeys []byte, stride int) ([]byte, error) {
+	if len(privateKeys)%32 != 0 {
+		return nil, fmt.Errorf("private keys must be a multiple of 32 bytes")
+	}
+	count := len(privateKeys) / 32
+	out := make([]byte, count*stride)
+	var errorMsg *C.char
+	kernelC := C.CString(kernelName)
+	defer C.free(unsafe.Pointer(kernelC))
+	code := C.metal_dump_pubkeys(kernelC, (*C.uint8_t)(unsafe.Pointer(&table[0])), C.uint32_t(len(table)), (*C.uint8_t)(unsafe.Pointer(&privateKeys[0])), C.uint32_t(count), C.uint32_t(stride), (*C.uint8_t)(unsafe.Pointer(&out[0])), &errorMsg)
+	if errorMsg != nil {
+		defer C.free(unsafe.Pointer(errorMsg))
+	}
+	if code != 0 {
+		if errorMsg != nil {
+			return nil, fmt.Errorf("dump kernel failed: %s", C.GoString(errorMsg))
+		}
+		return nil, fmt.Errorf("dump kernel failed with code %d", int(code))
+	}
+	return out, nil
 }
 
 func metalContextDeviceName(context unsafe.Pointer) (string, error) {
@@ -793,11 +1115,11 @@ func runMetalHybridBatch(context unsafe.Pointer, ctx context.Context, attempts i
 	}
 	defer zeroBytes(privateKeys)
 
-	gpuMatches, metalBufferDuration, kernelDuration, err := runMetalMatch(context, privateKeys, prefix, suffix)
+	gpuMatches, matchIndices, metalBufferDuration, kernelDuration, err := runMetalMatch(context, privateKeys, prefix, suffix)
 	if err != nil {
 		return 0, 0, stages, metalBufferDuration, kernelDuration, err
 	}
-	validationStages, err := validateMetalBatch(privateKeys, prefix, suffix, gpuMatches, validationMode)
+	validationStages, err := validateMetalBatch(privateKeys, prefix, suffix, gpuMatches, matchIndices, validationMode)
 	if err != nil {
 		return 0, 0, stages, metalBufferDuration, kernelDuration, err
 	}
@@ -808,7 +1130,7 @@ func runMetalHybridBatch(context unsafe.Pointer, ctx context.Context, attempts i
 	return len(privateKeys) / 32, gpuMatches, stages, metalBufferDuration, kernelDuration, nil
 }
 
-func validateMetalBatch(privateKeys []byte, prefix []byte, suffix []byte, gpuMatches uint32, validationMode string) (stageTotals, error) {
+func validateMetalBatch(privateKeys []byte, prefix []byte, suffix []byte, gpuMatches uint32, matchIndices []uint32, validationMode string) (stageTotals, error) {
 	validationMode, err := NormalizeMetalValidationMode(validationMode)
 	if err != nil {
 		return stageTotals{}, err
@@ -817,27 +1139,18 @@ func validateMetalBatch(privateKeys []byte, prefix []byte, suffix []byte, gpuMat
 		return stageTotals{}, fmt.Errorf("unsupported metal validation mode %q", validationMode)
 	}
 
-	cpuMatches, scalarDuration, hashDuration, matchDuration := countPrivateKeyMatches(privateKeys, prefix, suffix)
-	stages := stageTotals{Scalar: scalarDuration, Hash: hashDuration, Match: matchDuration}
-	if gpuMatches != cpuMatches {
-		return stages, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, cpuMatches)
-	}
-	return stages, nil
-}
-
-func countPrivateKeyMatches(privateKeys []byte, prefix []byte, suffix []byte) (uint32, time.Duration, time.Duration, time.Duration) {
-	count := len(privateKeys) / 32
+	// The kernel reports the index of every candidate that matched; only
+	// those (typically a handful per batch) are re-verified on the CPU
+	// instead of re-deriving every key in the batch.
+	stages := stageTotals{}
 	hasher := sha3.NewLegacyKeccak256()
-	matches := uint32(0)
-	scalarDuration := time.Duration(0)
-	hashDuration := time.Duration(0)
-	matchDuration := time.Duration(0)
+	for i := uint32(0); i < gpuMatches && i < uint32(len(matchIndices)); i++ {
+		index := matchIndices[i]
+		privateKey := privateKeys[index*32 : (index+1)*32]
 
-	for i := 0; i < count; i++ {
-		privateKey := privateKeys[i*32 : (i+1)*32]
 		stageStart := time.Now()
 		x, y := ethcrypto.S256().ScalarBaseMult(privateKey)
-		scalarDuration += time.Since(stageStart)
+		stages.Scalar += time.Since(stageStart)
 
 		var publicKey [64]byte
 		x.FillBytes(publicKey[:32])
@@ -845,19 +1158,18 @@ func countPrivateKeyMatches(privateKeys []byte, prefix []byte, suffix []byte) (u
 
 		stageStart = time.Now()
 		address := EthereumAddressBytesFromPublicKey(publicKey[:], hasher)
-		hashDuration += time.Since(stageStart)
+		stages.Hash += time.Since(stageStart)
 
 		stageStart = time.Now()
-		if addressMatches(address[:], prefix, suffix) {
-			matches++
+		if !addressMatches(address[:], prefix, suffix) {
+			return stages, fmt.Errorf("metal match validation failed: gpu index %d is not a match", index)
 		}
-		matchDuration += time.Since(stageStart)
+		stages.Match += time.Since(stageStart)
 	}
-
-	return matches, scalarDuration, hashDuration, matchDuration
+	return stages, nil
 }
 
-func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, suffix []byte, gpuMatches uint32, criteria wallet.GenerationCriteria, validationMode string) (metalGenerationCandidate, error) {
+func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, suffix []byte, gpuMatches uint32, matchIndices []uint32, criteria wallet.GenerationCriteria, validationMode string) (metalGenerationCandidate, error) {
 	validationMode, err := NormalizeMetalValidationMode(validationMode)
 	if err != nil {
 		return metalGenerationCandidate{}, err
@@ -867,10 +1179,12 @@ func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, su
 	}
 
 	candidate := metalGenerationCandidate{}
-	count := len(privateKeys) / 32
+	candidate.RawMatches = gpuMatches
 	hasher := sha3.NewLegacyKeccak256()
-	for i := 0; i < count; i++ {
-		privateKey := privateKeys[i*32 : (i+1)*32]
+	for i := uint32(0); i < gpuMatches && i < uint32(len(matchIndices)); i++ {
+		index := matchIndices[i]
+		privateKey := privateKeys[index*32 : (index+1)*32]
+
 		stageStart := time.Now()
 		x, y := ethcrypto.S256().ScalarBaseMult(privateKey)
 		candidate.Stages.Scalar += time.Since(stageStart)
@@ -885,10 +1199,11 @@ func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, su
 
 		stageStart = time.Now()
 		rawMatched := addressMatches(address[:], prefix, suffix)
-		if rawMatched {
-			candidate.RawMatches++
+		if !rawMatched {
+			zeroBytes(candidate.PrivateKey[:])
+			return metalGenerationCandidate{}, fmt.Errorf("metal match validation failed: gpu index %d is not a match", index)
 		}
-		fullMatched := rawMatched && MatchesCriteria(FormatEthereumAddressBytes(address), criteria)
+		fullMatched := MatchesCriteria(FormatEthereumAddressBytes(address), criteria)
 		candidate.Stages.Match += time.Since(stageStart)
 
 		if fullMatched && !candidate.Found {
@@ -903,42 +1218,38 @@ func findValidatedMetalGenerationCandidate(privateKeys []byte, prefix []byte, su
 			}
 		}
 	}
-
-	if gpuMatches != candidate.RawMatches {
-		zeroBytes(candidate.PrivateKey[:])
-		return metalGenerationCandidate{}, fmt.Errorf("metal match validation failed: gpu=%d cpu=%d", gpuMatches, candidate.RawMatches)
-	}
 	return candidate, nil
 }
 
-func runMetalMatch(context unsafe.Pointer, privateKeys []byte, prefix []byte, suffix []byte) (uint32, time.Duration, time.Duration, error) {
+func runMetalMatch(context unsafe.Pointer, privateKeys []byte, prefix []byte, suffix []byte) (uint32, []uint32, time.Duration, time.Duration, error) {
 	count, err := metalPrivateKeyBatchCount(privateKeys, maxMetalBatchCandidates())
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, nil, 0, 0, err
 	}
 	if err := validatePrivateKeyBatch(privateKeys); err != nil {
-		return 0, 0, 0, err
+		return 0, nil, 0, 0, err
 	}
 
 	var bufferNS C.double
 	var kernelNS C.double
 	var errorMsg *C.char
 	var matches C.uint32_t
+	matchIndices := make([]uint32, count)
 	privateKeyPtr := (*C.uint8_t)(unsafe.Pointer(&privateKeys[0]))
 	prefixPtr := cBytePointer(prefix)
 	suffixPtr := cBytePointer(suffix)
-	code := C.metal_run_match(context, privateKeyPtr, C.uint32_t(count), prefixPtr, C.uint32_t(len(prefix)), suffixPtr, C.uint32_t(len(suffix)), &matches, &bufferNS, &kernelNS, &errorMsg)
+	code := C.metal_run_match(context, privateKeyPtr, C.uint32_t(count), prefixPtr, C.uint32_t(len(prefix)), suffixPtr, C.uint32_t(len(suffix)), &matches, (*C.uint32_t)(unsafe.Pointer(&matchIndices[0])), C.uint32_t(count), &bufferNS, &kernelNS, &errorMsg)
 	if errorMsg != nil {
 		defer C.free(unsafe.Pointer(errorMsg))
 	}
 	if code != 0 {
 		if errorMsg != nil {
-			return 0, 0, 0, fmt.Errorf("metal match kernel failed: %s", C.GoString(errorMsg))
+			return 0, nil, 0, 0, fmt.Errorf("metal match kernel failed: %s", C.GoString(errorMsg))
 		}
-		return 0, 0, 0, fmt.Errorf("metal match kernel failed with code %d", int(code))
+		return 0, nil, 0, 0, fmt.Errorf("metal match kernel failed with code %d", int(code))
 	}
 
-	return uint32(matches), durationFromNanoseconds(float64(bufferNS)), durationFromNanoseconds(float64(kernelNS)), nil
+	return uint32(matches), matchIndices, durationFromNanoseconds(float64(bufferNS)), durationFromNanoseconds(float64(kernelNS)), nil
 }
 
 func validatePrivateKeyBatch(privateKeys []byte) error {

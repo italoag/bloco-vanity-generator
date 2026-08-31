@@ -14,6 +14,24 @@ import (
 	"github.com/google/uuid"
 )
 
+// bytes32 returns a 32-byte slice filled with the given byte value.
+func bytes32(v byte) []byte {
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = v
+	}
+	return b
+}
+
+// bytes16 returns a 16-byte slice filled with the given byte value.
+func bytes16(v byte) []byte {
+	b := make([]byte, 16)
+	for i := range b {
+		b[i] = v
+	}
+	return b
+}
+
 func TestNewKeyStoreV3(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -214,9 +232,9 @@ func TestKeyStoreV3_Validate(t *testing.T) {
 			name: "valid keystore",
 			setupFunc: func() *KeyStoreV3 {
 				ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
-				ks.SetScryptParams(262144, 8, 1, 32, []byte{1, 2, 3, 4})
-				ks.SetCipherParams([]byte{1, 2, 3, 4}, []byte{5, 6, 7, 8})
-				ks.SetMAC([]byte{9, 10, 11, 12})
+				ks.SetScryptParams(262144, 8, 1, 32, bytes32(1))
+				ks.SetCipherParams(bytes16(1), bytes32(2))
+				ks.SetMAC(bytes32(9))
 				return ks
 			},
 			wantError: false,
@@ -276,8 +294,8 @@ func TestKeyStoreV3_Validate(t *testing.T) {
 			name: "empty ciphertext",
 			setupFunc: func() *KeyStoreV3 {
 				ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
-				ks.SetScryptParams(262144, 8, 1, 32, []byte{1, 2, 3, 4})
-				ks.SetCipherParams([]byte{1, 2, 3, 4}, []byte{})
+				ks.SetScryptParams(262144, 8, 1, 32, bytes32(1))
+				ks.SetCipherParams(bytes16(1), []byte{})
 				return ks
 			},
 			wantError: true,
@@ -287,8 +305,8 @@ func TestKeyStoreV3_Validate(t *testing.T) {
 			name: "empty MAC",
 			setupFunc: func() *KeyStoreV3 {
 				ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
-				ks.SetScryptParams(262144, 8, 1, 32, []byte{1, 2, 3, 4})
-				ks.SetCipherParams([]byte{1, 2, 3, 4}, []byte{5, 6, 7, 8})
+				ks.SetScryptParams(262144, 8, 1, 32, bytes32(1))
+				ks.SetCipherParams(bytes16(1), bytes32(2))
 				return ks
 			},
 			wantError: true,
@@ -298,9 +316,9 @@ func TestKeyStoreV3_Validate(t *testing.T) {
 			name: "empty IV",
 			setupFunc: func() *KeyStoreV3 {
 				ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
-				ks.SetScryptParams(262144, 8, 1, 32, []byte{1, 2, 3, 4})
-				ks.Crypto.CipherText = "deadbeef"
-				ks.SetMAC([]byte{9, 10, 11, 12})
+				ks.SetScryptParams(262144, 8, 1, 32, bytes32(1))
+				ks.Crypto.CipherText = hex.EncodeToString(bytes32(3))
+				ks.SetMAC(bytes32(9))
 				return ks
 			},
 			wantError: true,
@@ -311,8 +329,8 @@ func TestKeyStoreV3_Validate(t *testing.T) {
 			setupFunc: func() *KeyStoreV3 {
 				ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
 				ks.Crypto.KDFParams = nil
-				ks.SetCipherParams([]byte{1, 2, 3, 4}, []byte{5, 6, 7, 8})
-				ks.SetMAC([]byte{9, 10, 11, 12})
+				ks.SetCipherParams(bytes16(1), bytes32(2))
+				ks.SetMAC(bytes32(9))
 				return ks
 			},
 			wantError: true,
@@ -343,10 +361,10 @@ func TestKeyStoreV3_Validate(t *testing.T) {
 func TestKeyStoreV3_JSONSerialization(t *testing.T) {
 	// Create a complete keystore
 	ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
-	salt := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	iv := []byte{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}
-	ciphertext := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe}
-	mac := []byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+	salt := bytes32(1)
+	iv := bytes16(16)
+	ciphertext := bytes32(0xde)
+	mac := bytes32(0x12)
 
 	ks.SetScryptParams(262144, 8, 1, 32, salt)
 	ks.SetCipherParams(iv, ciphertext)
@@ -416,10 +434,10 @@ func TestKeyStoreV3_JSONSerialization(t *testing.T) {
 func TestKeyStoreV3_JSONSerializationWithPBKDF2(t *testing.T) {
 	// Create a keystore with PBKDF2
 	ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
-	salt := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	iv := []byte{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}
-	ciphertext := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe}
-	mac := []byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+	salt := bytes32(1)
+	iv := bytes16(16)
+	ciphertext := bytes32(0xde)
+	mac := bytes32(0x12)
 
 	ks.SetPBKDF2Params(262144, 32, "hmac-sha256", salt)
 	ks.SetCipherParams(iv, ciphertext)
@@ -488,7 +506,7 @@ func TestKeyStoreV3_GetParams_WrongKDF(t *testing.T) {
 	ks := NewKeyStoreV3("0x1234567890abcdef1234567890abcdef12345678", "ethereum")
 
 	// Test getting scrypt params when KDF is scrypt (should work)
-	ks.SetScryptParams(262144, 8, 1, 32, []byte{1, 2, 3, 4})
+	ks.SetScryptParams(262144, 8, 1, 32, bytes32(1))
 	_, err := ks.GetScryptParams()
 	if err != nil {
 		t.Errorf("Expected no error for scrypt params with scrypt KDF, got: %v", err)
@@ -1480,9 +1498,23 @@ func TestKeyStoreService_SaveKeyStoreFiles(t *testing.T) {
 				t.Fatalf("Unexpected error: %v", err)
 			}
 
-			// Verify files were created
+			// Verify files were created (keystore uses the geth naming
+			// convention UTC--<timestamp>--<address>.json)
 			cleanAddress := strings.ToLower(strings.TrimPrefix(tt.address, "0x"))
-			keystoreFile := filepath.Join(tempDir, fmt.Sprintf("0x%s.json", cleanAddress))
+			keystoreFile := ""
+			entries, err := os.ReadDir(tempDir)
+			if err != nil {
+				t.Fatalf("Failed to read output directory: %v", err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), fmt.Sprintf("--0x%s.json", cleanAddress)) {
+					keystoreFile = filepath.Join(tempDir, entry.Name())
+					break
+				}
+			}
+			if keystoreFile == "" {
+				t.Errorf("Keystore file (UTC--*--0x%s.json) was not created", cleanAddress)
+			}
 			passwordFile := filepath.Join(tempDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
 
 			// Check keystore file exists and has correct content
@@ -1568,8 +1600,17 @@ func TestKeyStoreService_SaveKeyStoreFilesPreservesEthereumFilenameCase(t *testi
 		names[entry.Name()] = true
 	}
 
-	if !names[address+".json"] {
-		t.Fatalf("expected keystore filename %s.json, got %v", address, names)
+	// The keystore file uses the geth naming convention with a UTC timestamp
+	// prefix; verify the address suffix and case are preserved.
+	foundKeystore := false
+	for name := range names {
+		if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, "--"+address+".json") {
+			foundKeystore = true
+			break
+		}
+	}
+	if !foundKeystore {
+		t.Fatalf("expected keystore filename UTC--*--%s.json, got %v", address, names)
 	}
 
 	if !names[address+".pwd"] {
@@ -1704,8 +1745,14 @@ func TestKeyStoreService_EndToEndWorkflow(t *testing.T) {
 
 	for _, kdf := range kdfs {
 		t.Run(fmt.Sprintf("end_to_end_%s", kdf), func(t *testing.T) {
+			// Use a dedicated directory per KDF so the UTC--* file lookup
+			// cannot pick up a file from a previous subtest.
+			subDir := filepath.Join(tempDir, kdf)
+			if err := os.MkdirAll(subDir, 0755); err != nil {
+				t.Fatalf("Failed to create sub directory: %v", err)
+			}
 			config := KeyStoreConfig{
-				OutputDirectory: tempDir,
+				OutputDirectory: subDir,
 				Enabled:         true,
 				KDF:             kdf,
 			}
@@ -1728,8 +1775,21 @@ func TestKeyStoreService_EndToEndWorkflow(t *testing.T) {
 
 			// Verify we can load and decrypt the keystore
 			cleanAddress := strings.ToLower(strings.TrimPrefix(address, "0x"))
-			keystoreFile := filepath.Join(tempDir, fmt.Sprintf("0x%s.json", cleanAddress))
-			passwordFile := filepath.Join(tempDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
+			keystoreFile := ""
+			entries, err := os.ReadDir(subDir)
+			if err != nil {
+				t.Fatalf("Failed to read output directory: %v", err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), fmt.Sprintf("--0x%s.json", cleanAddress)) {
+					keystoreFile = filepath.Join(subDir, entry.Name())
+					break
+				}
+			}
+			if keystoreFile == "" {
+				t.Fatalf("Keystore file (UTC--*--0x%s.json) was not created", cleanAddress)
+			}
+			passwordFile := filepath.Join(subDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
 
 			// Load keystore from file
 			keystoreData, err := os.ReadFile(keystoreFile)
@@ -2149,13 +2209,14 @@ func TestKeyStoreService_FileExists(t *testing.T) {
 }
 
 func TestKeyStoreService_GetFilePaths(t *testing.T) {
-	config := KeyStoreConfig{OutputDirectory: "/test/dir", Enabled: true}
+	tmpDir := t.TempDir()
+	config := KeyStoreConfig{OutputDirectory: tmpDir, Enabled: true}
 	service := NewKeyStoreService(config)
 
 	tests := []struct {
 		name             string
 		address          string
-		wantKeystorePath string
+		wantKeystoreName string
 		wantPasswordPath string
 		wantMnemonicPath string
 		wantError        bool
@@ -2164,25 +2225,25 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "valid address with 0x prefix",
 			address:          "0x1234567890abcdef1234567890abcdef12345678",
-			wantKeystorePath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.json",
-			wantPasswordPath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.pwd",
-			wantMnemonicPath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.mnemonic",
+			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0x1234567890abcdef1234567890abcdef12345678.json",
+			wantPasswordPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd"),
+			wantMnemonicPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.mnemonic"),
 			wantError:        false,
 		},
 		{
 			name:             "valid address without 0x prefix",
 			address:          "1234567890abcdef1234567890abcdef12345678",
-			wantKeystorePath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.json",
-			wantPasswordPath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.pwd",
-			wantMnemonicPath: "/test/dir/0x1234567890abcdef1234567890abcdef12345678.mnemonic",
+			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0x1234567890abcdef1234567890abcdef12345678.json",
+			wantPasswordPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd"),
+			wantMnemonicPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.mnemonic"),
 			wantError:        false,
 		},
 		{
 			name:             "mixed case ethereum address",
 			address:          "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e",
-			wantKeystorePath: "/test/dir/0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
-			wantPasswordPath: "/test/dir/0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.pwd",
-			wantMnemonicPath: "/test/dir/0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.mnemonic",
+			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
+			wantPasswordPath: filepath.Join(tmpDir, "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.pwd"),
+			wantMnemonicPath: filepath.Join(tmpDir, "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.mnemonic"),
 			wantError:        false,
 		},
 
@@ -2196,6 +2257,15 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Create a keystore file matching the new naming convention so the
+			// directory scan can find it.
+			if !tt.wantError {
+				keystoreName := tt.wantKeystoreName
+				if err := os.WriteFile(filepath.Join(tmpDir, keystoreName), []byte(`{}`), 0600); err != nil {
+					t.Fatalf("Failed to write keystore file: %v", err)
+				}
+			}
+
 			keystorePath, err := service.GetKeystoreFilePath(tt.address)
 			if tt.wantError {
 				if err == nil {
@@ -2207,8 +2277,9 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 				if err != nil {
 					t.Errorf("Expected no error for keystore path but got: %v", err)
 				}
-				if keystorePath != tt.wantKeystorePath {
-					t.Errorf("Expected keystore path %s, got %s", tt.wantKeystorePath, keystorePath)
+				wantKeystorePath := filepath.Join(tmpDir, tt.wantKeystoreName)
+				if keystorePath != wantKeystorePath {
+					t.Errorf("Expected keystore path %s, got %s", wantKeystorePath, keystorePath)
 				}
 			}
 
@@ -2406,9 +2477,9 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 	// Create a valid keystore for testing
 	address := "1234567890abcdef1234567890abcdef12345678"
 	keystore := NewKeyStoreV3("0x"+address, "ethereum")
-	keystore.SetScryptParams(262144, 8, 1, 32, []byte("testsalt"))
-	keystore.SetCipherParams([]byte("testiv1234567890"), []byte("testciphertext"))
-	keystore.SetMAC([]byte("testmac"))
+	keystore.SetScryptParams(262144, 8, 1, 32, bytes32(7))
+	keystore.SetCipherParams(bytes16(8), bytes32(9))
+	keystore.SetMAC(bytes32(10))
 	password := "TestPassword123!"
 
 	// Test successful save
@@ -2417,8 +2488,21 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 		t.Errorf("Expected no error but got: %v", err)
 	}
 
-	// Verify files exist with correct permissions
-	keystorePath := filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.json")
+	// Verify files exist with correct permissions (UTC-- naming convention)
+	var keystorePath string
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to read output directory: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), "--0x"+address+".json") {
+			keystorePath = filepath.Join(tmpDir, entry.Name())
+			break
+		}
+	}
+	if keystorePath == "" {
+		t.Fatalf("Keystore file (UTC--*--0x%s.json) was not created", address)
+	}
 	passwordPath := filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd")
 
 	if info, err := os.Stat(keystorePath); err != nil {
@@ -2773,15 +2857,17 @@ func TestKeyStoreServicePerformanceBenchmark(t *testing.T) {
 
 	service := NewKeyStoreService(config)
 
-	// Benchmark keystore generation
+	// Benchmark keystore generation with valid secp256k1 private keys
 	start := time.Now()
 	numOperations := 10
 
 	for i := 0; i < numOperations; i++ {
-		privateKey := fmt.Sprintf("%064d", i) // Generate different private keys
-		address := fmt.Sprintf("0x%040d", i)  // Generate different addresses
+		// Valid private key: 0x01..0x0a in the last byte, zero elsewhere.
+		privateKeyBytes := bytes32(0)
+		privateKeyBytes[31] = byte(i + 1)
+		privateKey := hex.EncodeToString(privateKeyBytes)
 
-		err := service.SaveKeyStoreFiles(privateKey, address, "ethereum")
+		err := service.SaveKeyStoreFiles(privateKey, fmt.Sprintf("0x%040d", i+1), "ethereum")
 		if err != nil {
 			t.Fatalf("SaveKeyStoreFiles failed on iteration %d: %v", i, err)
 		}
