@@ -82,7 +82,9 @@ jobs:
 
     - name: Run Trivy vulnerability scanner
       if: github.event_name != 'pull_request'
-      uses: aquasecurity/trivy-action@master
+      # Pinned to an immutable tag: @master would run whatever the action's
+      # repository holds at the time of the build, without review.
+      uses: aquasecurity/trivy-action@0.28.0
       with:
         image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen:${{ steps.meta.outputs.version }}
         format: 'sarif'

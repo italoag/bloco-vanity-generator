@@ -613,6 +613,37 @@ func shouldAvoidStdout() bool {
 	return true
 }
 
+// LogFilePerm is the permission applied to log files. Operational logs record
+// the addresses that were generated, so they are kept owner-only like every
+// other artifact this tool writes to disk.
+const LogFilePerm os.FileMode = 0o600
+
+// openLogFile opens (or creates) a log file with owner-only permissions.
+// O_CREATE only applies the mode when the file is created, so a file that
+// already exists with looser permissions is tightened explicitly. Non-regular
+// targets (a pipe or a device such as /dev/stdout) are left untouched.
+func openLogFile(filePath string, flags int) (*os.File, error) {
+	file, err := os.OpenFile(filePath, flags, LogFilePerm)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("failed to stat log file %s: %w", filePath, err)
+	}
+
+	if info.Mode().IsRegular() && info.Mode().Perm() != LogFilePerm {
+		if err := file.Chmod(LogFilePerm); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("failed to restrict permissions on log file %s: %w", filePath, err)
+		}
+	}
+
+	return file, nil
+}
+
 // initializeFileWriter sets up the file writer and gets current file size
 func (l *FileSecureLogger) initializeFileWriter() error {
 	return l.initializeFileWriterWithPath(l.config.OutputFile)
@@ -620,7 +651,7 @@ func (l *FileSecureLogger) initializeFileWriter() error {
 
 // initializeFileWriterWithPath sets up the file writer with a specific path
 func (l *FileSecureLogger) initializeFileWriterWithPath(filePath string) error {
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := openLogFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return err
 	}
@@ -755,7 +786,7 @@ func (l *FileSecureLogger) rotateFile() error {
 	}
 
 	// Create new log file
-	file, err := os.OpenFile(l.config.OutputFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := openLogFile(l.config.OutputFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return fmt.Errorf("failed to create new log file: %w", err)
 	}

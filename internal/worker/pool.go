@@ -139,6 +139,9 @@ func (p *Pool) Shutdown() error {
 		p.statsCancel()
 	}
 
+	// Release the per-worker key chains and their background fillers.
+	p.closeChains()
+
 	// Close the logger if it exists
 	if p.logger != nil {
 		if err := p.logger.Close(); err != nil {
@@ -152,6 +155,13 @@ func (p *Pool) Shutdown() error {
 // GetStatsCollector returns the stats collector
 func (p *Pool) GetStatsCollector() *StatsCollector {
 	return p.statsCollector
+}
+
+// mnemonicWalletGenerator is implemented by generators that can produce a
+// wallet whose private key is actually derived from the mnemonic they return,
+// so the mnemonic is a usable backup.
+type mnemonicWalletGenerator interface {
+	GenerateWalletFromMnemonic() (*wallet.Wallet, error)
 }
 
 // getChain returns the chained key generator for a worker, creating it on
@@ -172,6 +182,37 @@ func (p *Pool) getChain(workerID int) (*crypto.PrivateKeyChain, error) {
 	}
 	p.chains[workerID] = chain
 	return chain, nil
+}
+
+// retireChain discards the chain a worker just delivered a wallet from.
+//
+// Keys inside one chain batch are consecutive scalars (k0, k0+1, ...), so two
+// wallets handed to the user from the same chain would be trivially derivable
+// from one another: whoever holds one key recovers the other by adding a small
+// integer. Retiring the chain on delivery guarantees every delivered key comes
+// from its own independent seed. The keys the chain produced but discarded
+// during the search were never handed out, so they carry no such exposure.
+func (p *Pool) retireChain(workerID int) {
+	p.chainsMu.Lock()
+	defer p.chainsMu.Unlock()
+
+	if workerID < len(p.chains) && p.chains[workerID] != nil {
+		p.chains[workerID].Close()
+		p.chains[workerID] = nil
+	}
+}
+
+// closeChains releases every chain the pool holds.
+func (p *Pool) closeChains() {
+	p.chainsMu.Lock()
+	defer p.chainsMu.Unlock()
+
+	for i, chain := range p.chains {
+		if chain != nil {
+			chain.Close()
+			p.chains[i] = nil
+		}
+	}
 }
 
 // GenerateWalletWithContext generates a wallet using the worker pool
@@ -250,27 +291,39 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 					addressStr string
 				)
 
-				// Mnemonic generation is only supported for Ethereum
-				// Bitcoin and Solana use different key derivation schemes (secp256k1 and Ed25519)
-				if criteria.UseMnemonic && criteria.Network != "ethereum" && criteria.Network != "" {
+				// Mnemonic generation needs a generator that actually derives the
+				// key from the phrase. Ethereum is handled below; Bitcoin
+				// implements mnemonicWalletGenerator; Solana (Ed25519) does not.
+				mnemonicCapable := false
+				if criteria.Network != "ethereum" && criteria.Network != "" {
+					_, mnemonicCapable = p.generator.(mnemonicWalletGenerator)
+				}
+
+				if criteria.UseMnemonic && criteria.Network != "ethereum" && criteria.Network != "" && !mnemonicCapable {
 					if p.logger != nil {
 						context := map[string]interface{}{
 							"worker_id": workerID,
 							"network":   criteria.Network,
 						}
 						if logErr := p.logger.LogError("unsupported_mnemonic_network",
-							fmt.Errorf("mnemonic generation is only supported for Ethereum network"), context); logErr != nil {
+							fmt.Errorf("mnemonic generation is not supported for this network"), context); logErr != nil {
 							_ = logErr
 						}
 					}
-					// Skip mnemonic generation for non-Ethereum networks
+					// Skip mnemonic generation where the key cannot be derived from it
 					criteria.UseMnemonic = false
 				}
 
 				// For non-Ethereum networks, use the generator directly
 				if criteria.Network != "ethereum" && criteria.Network != "" {
 					// Use the generator to create a complete wallet
-					genWallet, err := p.generator.GenerateWallet()
+					var genWallet *wallet.Wallet
+					var err error
+					if criteria.UseMnemonic && mnemonicCapable {
+						genWallet, err = p.generator.(mnemonicWalletGenerator).GenerateWalletFromMnemonic()
+					} else {
+						genWallet, err = p.generator.GenerateWallet()
+					}
 					if err != nil {
 						if p.logger != nil {
 							context := map[string]interface{}{
@@ -471,6 +524,12 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 
 				select {
 				case resultCh <- result:
+					// This key is now the user's wallet. Retire the chain it
+					// came from so no later wallet is a small offset away from
+					// it (see Pool.retireChain).
+					if chain != nil {
+						p.retireChain(workerID)
+					}
 				case <-ctx.Done():
 				}
 				return

@@ -1480,6 +1480,8 @@ func TestKeyStoreService_SaveKeyStoreFiles(t *testing.T) {
 				Enabled:         tt.enabled,
 				OutputDirectory: tempDir,
 				KDF:             "scrypt",
+				// This test asserts on the password file itself, so it opts in.
+				WritePasswordFile: true,
 			}
 			service := NewKeyStoreService(config)
 
@@ -1583,7 +1585,11 @@ func TestKeyStoreService_SaveKeyStoreFilesPreservesEthereumFilenameCase(t *testi
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	address := "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e"
-	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tempDir, KDF: "scrypt"})
+	service := NewKeyStoreService(KeyStoreConfig{
+		Enabled: true, OutputDirectory: tempDir, KDF: "scrypt",
+		// This test asserts on the password filename, so it opts in.
+		WritePasswordFile: true,
+	})
 	keystore := createValidKeyStore(strings.TrimPrefix(address, "0x"))
 
 	if err := service.SaveKeyStoreFilesToDisk(address, keystore, "TestPassword123!", "ethereum", ""); err != nil {
@@ -2511,10 +2517,10 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 		t.Errorf("Keystore file should have 0600 permissions, got %o", info.Mode().Perm())
 	}
 
-	if info, err := os.Stat(passwordPath); err != nil {
-		t.Errorf("Password file should exist: %v", err)
-	} else if info.Mode().Perm() != 0600 {
-		t.Errorf("Password file should have 0600 permissions, got %o", info.Mode().Perm())
+	// The password file is opt-in: by default it must NOT be written next to
+	// the keystore it unlocks.
+	if _, err := os.Stat(passwordPath); !os.IsNotExist(err) {
+		t.Errorf("Password file should not be written without WritePasswordFile, stat error was: %v", err)
 	}
 
 	// Test overwriting existing files
@@ -2884,7 +2890,9 @@ func TestKeyStoreServicePerformanceBenchmark(t *testing.T) {
 		t.Fatalf("Failed to read temp directory: %v", err)
 	}
 
-	expectedFiles := numOperations * 2 // keystore + password files
+	// One keystore per operation; the password file is opt-in and this service
+	// does not request it.
+	expectedFiles := numOperations
 	if len(files) != expectedFiles {
 		t.Errorf("Expected %d files, got %d", expectedFiles, len(files))
 	}

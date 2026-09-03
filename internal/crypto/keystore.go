@@ -20,6 +20,156 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
+const (
+	// KeyStoreDirPerm is the permission applied to the output directory. The
+	// file names in it are the generated addresses, so the listing itself is
+	// sensitive and the directory is owner-only.
+	KeyStoreDirPerm os.FileMode = 0o700
+
+	// DefaultKeyStoreFilePerm is the permission applied to every artifact
+	// written by this package (keystore, mnemonic, private key, password) when
+	// the configuration does not override it.
+	DefaultKeyStoreFilePerm os.FileMode = 0o600
+
+	// MaxKeyStoreFilePerm is the most permissive file mode accepted from the
+	// configuration. Anything beyond owner read/write would expose private key
+	// material to other local users.
+	MaxKeyStoreFilePerm os.FileMode = 0o600
+
+	// MinScryptN is the lowest scrypt cost parameter accepted for keystore
+	// encryption. It bounds the sequential work an attacker must redo per
+	// password guess, and matches the "low" --security-level preset so every
+	// documented security level stays usable.
+	MinScryptN = 1 << 14 // 16384
+
+	// MinScryptMemoryBytes is the lowest scrypt memory cost (128 * N * r)
+	// accepted. N alone is not enough: N=1024 with r=1 is only 128 KiB and is
+	// trivially brute-forced. 16 MiB is the cost of the "low" preset
+	// (N=16384, r=8), mirroring how MinPBKDF2Iterations sits just under the
+	// "low" PBKDF2 preset of 120000.
+	MinScryptMemoryBytes int64 = 16 * 1024 * 1024 // 16 MiB
+
+	// MinPBKDF2Iterations is the lowest PBKDF2 iteration count accepted.
+	MinPBKDF2Iterations = 100000
+)
+
+// resolveKDFParams returns the KDF parameters to encrypt with: the configured
+// ones when present, the handler defaults otherwise. The result is always a
+// fresh map that the caller may mutate.
+func (ks *KeyStoreService) resolveKDFParams(kdfType string) (map[string]interface{}, error) {
+	if len(ks.config.KDFParams) > 0 {
+		if configuredParamsMatchKDF(kdfType, ks.config.KDFParams) {
+			params := make(map[string]interface{}, len(ks.config.KDFParams)+1)
+			for key, value := range ks.config.KDFParams {
+				params[key] = value
+			}
+			// A salt carried over from a previous keystore must never be reused.
+			delete(params, "salt")
+			return params, nil
+		}
+
+		ks.logger.LogWarning(fmt.Sprintf(
+			"Configured KDF parameters do not apply to %s (they are missing the parameters it "+
+				"requires); using the defaults for %s instead", kdfType, kdfType))
+	}
+
+	defaults, err := ks.kdfService.GetDefaultParams(kdfType)
+	if err != nil {
+		if kdfErr, ok := err.(*kdf.KDFError); ok {
+			return nil, NewKDFKeyStoreError("encrypt", "kdf_params", kdfErr)
+		}
+		return nil, NewKeyStoreError("encrypt", "kdf_params", err)
+	}
+
+	return defaults, nil
+}
+
+// configuredParamsMatchKDF reports whether the configured parameter map carries
+// the keys the given KDF actually needs. Parameters configured for a different
+// KDF (scrypt's n/r/p handed to pbkdf2, say) must not be forced onto it.
+func configuredParamsMatchKDF(kdfType string, params map[string]interface{}) bool {
+	var required []string
+
+	switch {
+	case strings.HasPrefix(strings.ToLower(kdfType), "scrypt"):
+		required = []string{"n", "r", "p"}
+	case strings.HasPrefix(strings.ToLower(kdfType), "pbkdf2"):
+		required = []string{"c"}
+	default:
+		return false
+	}
+
+	for _, key := range required {
+		if _, ok := params[key]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// ScryptMemoryBytes returns the approximate working-set size of scrypt for the
+// given parameters.
+func ScryptMemoryBytes(n, r int) int64 {
+	return int64(128) * int64(n) * int64(r)
+}
+
+// ValidateScryptSecurityFloor rejects scrypt parameters too weak to protect a
+// private key. It is the single source of truth for the policy, so parameters
+// reaching the cipher are held to the same bar regardless of whether they came
+// from --kdf-params, --security-level or a configuration file.
+func ValidateScryptSecurityFloor(n, r int) error {
+	if n < MinScryptN {
+		return fmt.Errorf("scrypt n parameter too low for security: %d (minimum: %d)", n, MinScryptN)
+	}
+
+	if memory := ScryptMemoryBytes(n, r); memory < MinScryptMemoryBytes {
+		return fmt.Errorf(
+			"scrypt memory cost too low for security: %d bytes with n=%d r=%d (minimum: %d bytes)",
+			memory, n, r, MinScryptMemoryBytes)
+	}
+
+	return nil
+}
+
+// ValidatePBKDF2SecurityFloor rejects PBKDF2 iteration counts too low to
+// protect a private key.
+func ValidatePBKDF2SecurityFloor(c int) error {
+	if c < MinPBKDF2Iterations {
+		return fmt.Errorf("pbkdf2 iteration count too low for security: %d (minimum: %d)",
+			c, MinPBKDF2Iterations)
+	}
+
+	return nil
+}
+
+// validateKDFSecurityFloor applies the floor to a raw KDF parameter map for the
+// given KDF type. Parameters it does not recognise are left to the KDF
+// handler's own validation.
+func validateKDFSecurityFloor(kdfType string, params map[string]interface{}) error {
+	switch {
+	case strings.HasPrefix(strings.ToLower(kdfType), "scrypt"):
+		n, err := parseIntParam(params["n"])
+		if err != nil {
+			return fmt.Errorf("invalid scrypt n parameter: %w", err)
+		}
+		r, err := parseIntParam(params["r"])
+		if err != nil {
+			return fmt.Errorf("invalid scrypt r parameter: %w", err)
+		}
+		return ValidateScryptSecurityFloor(n, r)
+
+	case strings.HasPrefix(strings.ToLower(kdfType), "pbkdf2"):
+		c, err := parseIntParam(params["c"])
+		if err != nil {
+			return fmt.Errorf("invalid pbkdf2 c parameter: %w", err)
+		}
+		return ValidatePBKDF2SecurityFloor(c)
+	}
+
+	return nil
+}
+
 // KeyStoreError represents detailed error information for keystore operations
 type KeyStoreError struct {
 	Operation   string        // The operation that failed (e.g., "encrypt", "save_file", "validate")
@@ -704,8 +854,13 @@ func (ks *KeyStoreV3) Validate() error {
 		return fmt.Errorf("IV must be 32 hex characters (16 bytes), got %d", len(ks.Crypto.CipherParams.IV))
 	}
 
-	if len(ks.Crypto.CipherText) != 64 {
-		return fmt.Errorf("ciphertext must be 64 hex characters (32 bytes), got %d", len(ks.Crypto.CipherText))
+	// AES-CTR is a stream cipher, so the ciphertext is exactly as long as the
+	// key it protects: 32 bytes for a secp256k1 key (Ethereum, Bitcoin) and
+	// 64 bytes for an Ed25519 key (Solana).
+	if len(ks.Crypto.CipherText) != 64 && len(ks.Crypto.CipherText) != 128 {
+		return fmt.Errorf(
+			"ciphertext must be 64 hex characters (32-byte key) or 128 hex characters (64-byte key), got %d",
+			len(ks.Crypto.CipherText))
 	}
 
 	if len(ks.Crypto.MAC) != 64 {
@@ -951,11 +1106,11 @@ func EncryptPrivateKey(privateKeyHex string, password string, kdfType string) (*
 	}
 	service := NewKeyStoreService(config)
 
-	return service.EncryptPrivateKeyWithKDF(privateKeyHex, password, kdfType, "ethereum")
+	return service.EncryptPrivateKeyWithKDF(privateKeyHex, password, kdfType, "ethereum", "")
 }
 
 // EncryptPrivateKeyWithKDF encrypts a private key using the Universal KDF service
-func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, password string, kdfType string, network string) (*KeyStoreV3, error) {
+func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, password string, kdfType string, network string, addressHint string) (*KeyStoreV3, error) {
 	if privateKeyHex == "" {
 		return nil, NewKeyStoreError("encrypt", "private_key", fmt.Errorf("private key cannot be empty"))
 	}
@@ -1000,29 +1155,36 @@ func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, passwo
 			"Failed to generate initialization vector. This might be due to insufficient system entropy.")
 	}
 
-	// Get default parameters for the specified KDF
-	defaultParams, err := ks.kdfService.GetDefaultParams(kdfType)
+	// Resolve the KDF parameters. Parameters configured through --kdf-params or
+	// derived from --security-level arrive in ks.config.KDFParams and take
+	// precedence; the handler defaults are the fallback. The map is copied
+	// because the per-keystore salt is written into it below and the config map
+	// is shared across every keystore this service generates.
+	effectiveParams, err := ks.resolveKDFParams(kdfType)
 	if err != nil {
-		if kdfErr, ok := err.(*kdf.KDFError); ok {
-			return nil, NewKDFKeyStoreError("encrypt", "kdf_params", kdfErr)
-		}
-		return nil, NewKeyStoreError("encrypt", "kdf_params", err)
+		return nil, err
 	}
 
 	// Add salt to parameters
-	defaultParams["salt"] = hex.EncodeToString(salt)
+	effectiveParams["salt"] = hex.EncodeToString(salt)
 
 	// Create crypto parameters for KDF service
 	cryptoParams := &kdf.CryptoParams{
 		KDF:       kdfType,
-		KDFParams: defaultParams,
+		KDFParams: effectiveParams,
 	}
 
 	// Validate parameters before key derivation
-	if err := ks.kdfService.ValidateParams(kdfType, defaultParams); err != nil {
+	if err := ks.kdfService.ValidateParams(kdfType, effectiveParams); err != nil {
 		if kdfErr, ok := err.(*kdf.KDFError); ok {
 			return nil, NewKDFKeyStoreError("validate", "kdf_params", kdfErr)
 		}
+		return nil, NewKeyStoreError("validate", "kdf_params", err)
+	}
+
+	// Enforce the security floor on whatever parameters are actually about to
+	// be used, so configured parameters cannot weaken the keystore.
+	if err := validateKDFSecurityFloor(kdfType, effectiveParams); err != nil {
 		return nil, NewKeyStoreError("validate", "kdf_params", err)
 	}
 
@@ -1070,16 +1232,27 @@ func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, passwo
 		return nil, NewKeyStoreError("encrypt", "mac", fmt.Errorf("MAC generation failed: %w", err))
 	}
 
-	// Derive Ethereum address from the private key
-	privateKey, err := crypto.ToECDSA(privateKeyBytes)
-	if err != nil {
-		return nil, NewKeyStoreError("encrypt", "private_key",
-			fmt.Errorf("invalid private key: %w", err))
+	// Derive the address that identifies this keystore. Only secp256k1 keys can
+	// be turned into an Ethereum address; an Ed25519 Solana key is 64 bytes and
+	// ToECDSA rejects it, which used to abort Solana keystore generation
+	// entirely and leave the wallet with no artifact on disk at all.
+	address := strings.ToLower(strings.TrimPrefix(addressHint, "0x"))
+	if network == "ethereum" || network == "" {
+		privateKey, err := crypto.ToECDSA(privateKeyBytes)
+		if err != nil {
+			return nil, NewKeyStoreError("encrypt", "private_key",
+				fmt.Errorf("invalid private key: %w", err))
+		}
+		address = strings.ToLower(strings.TrimPrefix(crypto.PubkeyToAddress(privateKey.PublicKey).Hex(), "0x"))
 	}
-	address := strings.ToLower(strings.TrimPrefix(crypto.PubkeyToAddress(privateKey.PublicKey).Hex(), "0x"))
+
+	if address == "" {
+		return nil, NewKeyStoreError("encrypt", "address",
+			fmt.Errorf("address is required to build a keystore for network %q", network))
+	}
 
 	// Create KeyStore V3 structure
-	keystore := NewKeyStoreV3(address, "ethereum")
+	keystore := NewKeyStoreV3(address, network)
 
 	// Set cipher parameters
 	keystore.SetCipherParams(iv, ciphertext)
@@ -1088,7 +1261,7 @@ func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, passwo
 	// Set KDF parameters based on type
 	switch kdfType {
 	case "scrypt":
-		scryptParams, err := ParseScryptParamsFromMap(defaultParams)
+		scryptParams, err := ParseScryptParamsFromMap(effectiveParams)
 		if err != nil {
 			return nil, NewKeyStoreError("convert", "scrypt_params", err)
 		}
@@ -1096,7 +1269,7 @@ func (ks *KeyStoreService) EncryptPrivateKeyWithKDF(privateKeyHex string, passwo
 			return nil, NewKeyStoreError("set", "scrypt_params", err)
 		}
 	case "pbkdf2", "pbkdf2-sha256", "pbkdf2-sha512":
-		pbkdf2Params, err := ParsePBKDF2ParamsFromMap(defaultParams)
+		pbkdf2Params, err := ParsePBKDF2ParamsFromMap(effectiveParams)
 		if err != nil {
 			return nil, NewKeyStoreError("convert", "pbkdf2_params", err)
 		}
@@ -1117,8 +1290,18 @@ type KeyStoreConfig struct {
 	Cipher          string                 // "aes-128-ctr"
 	KDF             string                 // "scrypt" or "pbkdf2"
 	KDFParams       map[string]interface{} // KDF-specific parameters
-	MaxRetries      int                    // Maximum number of retry attempts for recoverable errors
-	RetryDelay      int                    // Delay between retries in milliseconds
+	FilePerm        os.FileMode            // Permission for written artifacts; defaults to DefaultKeyStoreFilePerm
+
+	// WritePasswordFile writes the keystore password next to the keystore as
+	// <address>.pwd. Off by default: storing the password beside the file it
+	// unlocks makes the KDF pointless the moment the directory is copied.
+	WritePasswordFile bool
+
+	// WritePlaintextKeyFile writes the raw private key as <address>.key for
+	// networks that support it. Off by default for the same reason.
+	WritePlaintextKeyFile bool
+	MaxRetries            int // Maximum number of retry attempts for recoverable errors
+	RetryDelay            int // Delay between retries in milliseconds
 }
 
 // FileOperationError represents errors that occur during file operations
@@ -1189,6 +1372,12 @@ func NewKeyStoreService(config KeyStoreConfig) *KeyStoreService {
 	}
 	if config.OutputDirectory == "" {
 		config.OutputDirectory = "./keystores"
+	}
+	// A zero FilePerm means "not configured". Anything looser than
+	// MaxKeyStoreFilePerm would expose private key material, so it is clamped
+	// rather than trusted.
+	if config.FilePerm == 0 || config.FilePerm&^MaxKeyStoreFilePerm != 0 {
+		config.FilePerm = DefaultKeyStoreFilePerm
 	}
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 3
@@ -1302,7 +1491,7 @@ func (ks *KeyStoreService) GenerateKeyStore(privateKeyHex, address, network stri
 	}
 
 	// Encrypt private key using the Universal KDF service
-	keystore, err := ks.EncryptPrivateKeyWithKDF(privateKeyHex, password, ks.config.KDF, network)
+	keystore, err := ks.EncryptPrivateKeyWithKDF(privateKeyHex, password, ks.config.KDF, network, address)
 	if err != nil {
 		// Error is already properly formatted from EncryptPrivateKeyWithKDF
 		if ksErr, ok := err.(*KeyStoreError); ok {
@@ -1462,14 +1651,21 @@ func (ks *KeyStoreService) SaveKeyStoreFilesToDisk(address string, keystore *Key
 	case "ethereum", "":
 		return ks.saveEthereumKeyStore(address, keystore, password)
 	case "bitcoin":
-		// Bitcoin only saves mnemonic, no KeyStore V3
-		return fmt.Errorf("bitcoin keystore saving should use SaveMnemonicFile directly")
+		// Bitcoin used to persist only a mnemonic that did not derive the
+		// generated key, so nothing on disk could restore the wallet. The key
+		// is now written as an encrypted keystore like every other network.
+		return ks.saveBitcoinKeyStore(address, keystore, password)
 	case "solana":
-		// Save Solana keypair JSON
+		// Save the encrypted Solana keystore
 		if err := ks.saveSolanaKeypair(address, keystore); err != nil {
 			return err
 		}
-		// Also save private key to .key file for easy access (unencrypted)
+		// The raw private key is only written when explicitly requested: it is
+		// unencrypted, and writing it by default made the encrypted keystore
+		// beside it pointless.
+		if !ks.config.WritePlaintextKeyFile {
+			return nil
+		}
 		return ks.SavePrivateKeyFile(address, privateKeyHex, network)
 	default:
 		return NewKeyStoreError("save", "network", fmt.Errorf("unsupported network: %s", network))
@@ -1513,16 +1709,26 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 
 	// Write keystore file atomically with secure permissions (600)
 	ks.logger.LogDebug(fmt.Sprintf("Writing keystore file: %s", keystorePath))
-	if err := ks.writeFileAtomic(keystorePath, keystoreJSON, 0600); err != nil {
+	if err := ks.writeFileAtomic(keystorePath, keystoreJSON, ks.config.FilePerm); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write keystore file %s: %v", keystorePath, err))
 		return NewRecoverableKeyStoreError("save", "keystore_file", err,
 			fmt.Sprintf("Failed to save keystore file to '%s'. Please check disk space and permissions.", keystorePath))
 	}
 	ks.logger.LogDebug(fmt.Sprintf("Keystore file written successfully: %s", keystorePath))
 
+	// The password file is opt-in. Written next to the keystore it unlocks, it
+	// reduces the whole scrypt/PBKDF2 cost to zero for anyone who copies the
+	// directory, so the caller must ask for it explicitly.
+	if !ks.config.WritePasswordFile {
+		if err := ks.ValidateFilePermissions(keystorePath, ks.config.FilePerm); err != nil {
+			return NewKeyStoreErrorWithPath("validate", "keystore_permissions", keystorePath, err)
+		}
+		return nil
+	}
+
 	// Write password file atomically with secure permissions (600)
 	ks.logger.LogDebug(fmt.Sprintf("Writing password file: %s", passwordPath))
-	if err := ks.writeFileAtomic(passwordPath, []byte(password), 0600); err != nil {
+	if err := ks.writeFileAtomic(passwordPath, []byte(password), ks.config.FilePerm); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write password file %s: %v", passwordPath, err))
 		// If password file fails, try to clean up keystore file
 		ks.logger.LogDebug(fmt.Sprintf("Attempting to clean up keystore file: %s", keystorePath))
@@ -1539,15 +1745,53 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 	ks.logger.LogDebug(fmt.Sprintf("Password file written successfully: %s", passwordPath))
 
 	// Verify both files were created with correct permissions
-	if err := ks.ValidateFilePermissions(keystorePath, 0600); err != nil {
+	if err := ks.ValidateFilePermissions(keystorePath, ks.config.FilePerm); err != nil {
 		return NewKeyStoreErrorWithPath("validate", "keystore_permissions", keystorePath, err)
 	}
 
-	if err := ks.ValidateFilePermissions(passwordPath, 0600); err != nil {
+	if err := ks.ValidateFilePermissions(passwordPath, ks.config.FilePerm); err != nil {
 		return NewKeyStoreErrorWithPath("validate", "password_permissions", passwordPath, err)
 	}
 
 	return nil
+}
+
+// saveBitcoinKeyStore writes the encrypted KeyStore V3 for a Bitcoin wallet as
+// <address>.json. The password file follows the same opt-in rule as Ethereum.
+func (ks *KeyStoreService) saveBitcoinKeyStore(address string, keystore *KeyStoreV3, password string) error {
+	if keystore == nil {
+		return NewKeyStoreErrorWithAddress("save", "keystore", address, fmt.Errorf("keystore cannot be nil"))
+	}
+
+	formattedAddress := formatAddressForFilename(address, "bitcoin")
+	keystorePath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.json", formattedAddress))
+
+	keystoreJSON, err := keystore.ToJSON()
+	if err != nil {
+		return NewKeyStoreErrorWithAddress("serialize", "keystore", address, err)
+	}
+
+	ks.logger.LogDebug(fmt.Sprintf("Writing Bitcoin keystore file: %s", keystorePath))
+	if err := ks.writeFileAtomic(keystorePath, keystoreJSON, ks.config.FilePerm); err != nil {
+		ks.logger.LogError(fmt.Sprintf("Failed to write Bitcoin keystore file %s: %v", keystorePath, err))
+		return NewRecoverableKeyStoreError("save", "keystore_file", err,
+			fmt.Sprintf("Failed to save keystore file to '%s'. Please check disk space and permissions.", keystorePath))
+	}
+
+	if err := ks.ValidateFilePermissions(keystorePath, ks.config.FilePerm); err != nil {
+		return NewKeyStoreErrorWithPath("validate", "keystore_permissions", keystorePath, err)
+	}
+
+	if !ks.config.WritePasswordFile {
+		return nil
+	}
+
+	passwordPath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.pwd", formattedAddress))
+	if err := ks.writeFileAtomic(passwordPath, []byte(password), ks.config.FilePerm); err != nil {
+		return NewKeyStoreErrorWithPath("write", "password_file", passwordPath, err)
+	}
+
+	return ks.ValidateFilePermissions(passwordPath, ks.config.FilePerm)
 }
 
 // saveSolanaKeypair saves Solana keypair in the native Solana format
@@ -1563,34 +1807,24 @@ func (ks *KeyStoreService) saveSolanaKeypair(address string, keystore *KeyStoreV
 	// Get file path (no 0x prefix for Solana)
 	keypairPath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.json", formattedAddress))
 
-	// For Solana, we need to extract the private key from the keystore
-	// Since KeyStore V3 is encrypted, we'll create a simpler format
-	// Note: In a real implementation, you'd decrypt the private key first
-	// For now, we'll save a placeholder that indicates this is a Solana keypair
-
-	// Create Solana keypair structure (simplified)
-	// In production, this should be the actual 64-byte array
-	solanaKeypair := map[string]interface{}{
-		"type":    "solana-keypair",
-		"address": address,
-		"note":    "Solana keypair - private key is encrypted in KeyStore V3 format",
-	}
-
-	// Serialize to JSON
-	keypairJSON, err := json.MarshalIndent(solanaKeypair, "", "  ")
+	// Write the actual encrypted KeyStore V3. This file used to hold only a
+	// metadata placeholder whose "note" claimed the key was encrypted in
+	// KeyStore V3 format while nothing encrypted was ever written, so the only
+	// usable copy of the key was the plaintext .key file next to it.
+	keypairJSON, err := keystore.ToJSON()
 	if err != nil {
 		return NewKeyStoreErrorWithAddress("serialize", "keypair", address, err)
 	}
 
 	// Write keypair file atomically
 	ks.logger.LogDebug(fmt.Sprintf("Writing Solana keypair file: %s", keypairPath))
-	if err := ks.writeFileAtomic(keypairPath, keypairJSON, 0600); err != nil {
+	if err := ks.writeFileAtomic(keypairPath, keypairJSON, ks.config.FilePerm); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write Solana keypair file %s: %v", keypairPath, err))
 		return NewKeyStoreErrorWithPath("write", "keypair", keypairPath, err)
 	}
 
 	// Verify file permissions
-	if err := ks.ValidateFilePermissions(keypairPath, 0600); err != nil {
+	if err := ks.ValidateFilePermissions(keypairPath, ks.config.FilePerm); err != nil {
 		ks.logger.LogWarning(fmt.Sprintf("Solana keypair file permissions verification failed: %v", err))
 	}
 
@@ -1640,14 +1874,14 @@ func (ks *KeyStoreService) SaveMnemonicFile(address, mnemonic, network string) e
 	}
 
 	ks.logger.LogDebug(fmt.Sprintf("Writing mnemonic file: %s", mnemonicPath))
-	if err := ks.writeFileAtomic(mnemonicPath, []byte(mnemonic), 0600); err != nil {
+	if err := ks.writeFileAtomic(mnemonicPath, []byte(mnemonic), ks.config.FilePerm); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write mnemonic file %s: %v", mnemonicPath, err))
 		return NewRecoverableKeyStoreError("save", "mnemonic_file", err,
 			fmt.Sprintf("Failed to save mnemonic file to '%s'. Please check disk space and permissions.", mnemonicPath))
 	}
 	ks.logger.LogDebug(fmt.Sprintf("Mnemonic file written successfully: %s", mnemonicPath))
 
-	if err := ks.ValidateFilePermissions(mnemonicPath, 0600); err != nil {
+	if err := ks.ValidateFilePermissions(mnemonicPath, ks.config.FilePerm); err != nil {
 		return NewKeyStoreErrorWithPath("validate", "mnemonic_permissions", mnemonicPath, err)
 	}
 
@@ -1675,7 +1909,7 @@ func (ks *KeyStoreService) SavePrivateKeyFile(address, privateKeyHex, network st
 
 	// Write private key file atomically
 	ks.logger.LogDebug(fmt.Sprintf("Writing private key file: %s", keyPath))
-	if err := ks.writeFileAtomic(keyPath, []byte(privateKeyHex), 0600); err != nil {
+	if err := ks.writeFileAtomic(keyPath, []byte(privateKeyHex), ks.config.FilePerm); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write private key file %s: %v", keyPath, err))
 		return NewKeyStoreErrorWithPath("write", "private_key", keyPath, err)
 	}
@@ -1709,8 +1943,10 @@ func (ks *KeyStoreService) ensureOutputDirectory() error {
 		return fmt.Errorf("failed to check directory %s: %w", cleanPath, err)
 	}
 
-	// Directory doesn't exist, create it with all parent directories
-	if err := os.MkdirAll(cleanPath, 0755); err != nil {
+	// Directory doesn't exist, create it with all parent directories.
+	// The directory holds keystores and mnemonics, and the file names are the
+	// generated addresses, so it is owner-only.
+	if err := os.MkdirAll(cleanPath, KeyStoreDirPerm); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", cleanPath, err)
 	}
 
@@ -1742,7 +1978,7 @@ func (ks *KeyStoreService) writeFileAtomic(filename string, data []byte, perm os
 	dir := filepath.Dir(cleanFilename)
 
 	// Ensure the directory exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, KeyStoreDirPerm); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
@@ -1902,6 +2138,34 @@ func (ks *KeyStoreService) CheckDirectoryPermissions() error {
 	// Clean up test file
 	_ = tmpFile.Close()
 	_ = os.Remove(tmpFile.Name())
+
+	// Inspect the actual mode. A pre-existing directory supplied through
+	// --keystore-dir may be far more permissive than the KeyStoreDirPerm this
+	// tool creates, which would expose the generated addresses (the file names)
+	// and, when world-writable, let another local user swap the artifacts.
+	return ks.checkDirectoryMode(info.Mode().Perm())
+}
+
+// checkDirectoryMode rejects a world-writable output directory and warns about
+// any other group/other bit. It is separated from CheckDirectoryPermissions so
+// the policy can be tested without touching the filesystem.
+func (ks *KeyStoreService) checkDirectoryMode(perm os.FileMode) error {
+	if perm&0o002 != 0 {
+		return &FileOperationError{
+			Operation: "check_permissions",
+			Path:      ks.config.OutputDirectory,
+			Err: fmt.Errorf("directory is world-writable (mode %04o): any local user can replace "+
+				"the keystore files written here; use %04o or run with --no-keystore",
+				perm, KeyStoreDirPerm),
+		}
+	}
+
+	if perm&0o077 != 0 {
+		ks.logger.LogWarning(fmt.Sprintf(
+			"Keystore directory %s has mode %04o: other local users can list the generated "+
+				"addresses. Recommended: chmod %04o %s",
+			ks.config.OutputDirectory, perm, KeyStoreDirPerm, ks.config.OutputDirectory))
+	}
 
 	return nil
 }

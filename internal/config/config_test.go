@@ -272,3 +272,39 @@ func TestConfig_ApplyOverrides_LoggingConfig(t *testing.T) {
 		t.Errorf("OutputFile = %v, want %v", cfg.Logging.OutputFile, file)
 	}
 }
+
+// TestValidateRejectsPermissiveKeystoreFileMode is a regression test for
+// GitHub issue #18: the file mode used to be validated up to 0777, which would
+// have allowed private key material to be written world-readable once the
+// field was actually applied.
+func TestValidateRejectsPermissiveKeystoreFileMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      int
+		wantError bool
+	}{
+		{"owner read/write", 0o600, false},
+		{"owner read-only", 0o400, false},
+		{"group readable", 0o640, true},
+		{"world readable", 0o644, true},
+		{"world writable", 0o666, true},
+		{"everything", 0o777, true},
+		{"zero", 0, true},
+		{"negative", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.KeyStore.FileMode = tt.mode
+
+			err := cfg.Validate()
+			if tt.wantError && err == nil {
+				t.Errorf("expected file mode %04o to be rejected", tt.mode)
+			}
+			if !tt.wantError && err != nil {
+				t.Errorf("expected file mode %04o to be accepted, got %v", tt.mode, err)
+			}
+		})
+	}
+}

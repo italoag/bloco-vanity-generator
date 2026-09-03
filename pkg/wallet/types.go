@@ -137,8 +137,34 @@ func (gc *GenerationCriteria) IsEmpty() bool {
 	return gc.Prefix == "" && gc.Suffix == ""
 }
 
+// SupportedNetworks lists every network the generator can produce keys for.
+// An empty network string is accepted as a synonym for "ethereum".
+var SupportedNetworks = []string{"ethereum", "bitcoin", "solana"}
+
+// IsSupportedNetwork reports whether the given network is one this tool can
+// generate for. The empty string means the default (ethereum).
+func IsSupportedNetwork(network string) bool {
+	if network == "" {
+		return true
+	}
+	for _, supported := range SupportedNetworks {
+		if network == supported {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate checks if the generation criteria is valid
 func (gc *GenerationCriteria) Validate() error {
+	// Network validation. Without this an unknown value falls through to the
+	// Ethereum generator, producing a real private key for a network the user
+	// did not ask for and that no backup path will persist.
+	if !IsSupportedNetwork(gc.Network) {
+		return NewValidationError("criteria_validation",
+			"unsupported network: "+gc.Network+" (supported: ethereum, bitcoin, solana)")
+	}
+
 	// Pattern length validation
 	patternLength := gc.GetPatternLength()
 	if patternLength > 20 { // Reasonable limit to prevent extremely long generation times

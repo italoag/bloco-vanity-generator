@@ -20,8 +20,8 @@ const ChainBatchSize = 4096
 // chained keys are always kept in the range [2, N-2], so the chain never hits
 // the generator G, its negation -G, or the point at infinity.
 var (
-	chainTwo           = big.NewInt(2)
-	chainMaxSeed       = new(big.Int).Sub(secp256k1.S256().Params().N, big.NewInt(ChainBatchSize+1))
+	chainTwo            = big.NewInt(2)
+	chainMaxSeed        = new(big.Int).Sub(secp256k1.S256().Params().N, big.NewInt(ChainBatchSize+1))
 	chainGeneratorPoint = newJacobianPoint(secp256k1.S256().Params().Gx, secp256k1.S256().Params().Gy)
 )
 
@@ -320,23 +320,31 @@ type chainBatch struct {
 	prefix []secp256k1.FieldVal
 }
 
-// PrivateKeyChain generates a stream of uniformly random secp256k1 private
-// keys as chained batches: each batch starts from a random seed k0 in
-// [2, N-2-batch] followed by k0+1, k0+2, ... . Public keys are derived
-// incrementally (P + G in Jacobian coordinates) and converted to affine
-// coordinates with one batched field inversion per batch.
+// PrivateKeyChain scans candidate secp256k1 private keys as chained batches:
+// each batch starts from a random seed k0 in [2, N-2-batch] followed by
+// k0+1, k0+2, ... . Public keys are derived incrementally (P + G in Jacobian
+// coordinates) and converted to affine coordinates with one batched field
+// inversion per batch.
 //
 // Batches are prefetched on a background goroutine so the fill cost (chain
 // build + batched inversion) overlaps with key consumption.
 //
-// The chain is NOT a stream cipher and must not be used as a source of
-// independent random keys outside vanity generation.
+// IMPORTANT: keys within one batch are NOT independent. They are consecutive
+// scalars, so anyone holding one of them recovers the other 4095 by adding a
+// small integer. The chain is a search device only: a caller that hands one of
+// these keys to a user as a wallet MUST discard the chain (see Close) so that
+// no two delivered keys ever come from the same batch. It is not a source of
+// independent random keys and must not be used as one.
 type PrivateKeyChain struct {
 	batches chan *chainBatch
 	current *chainBatch
 	pos     int
 	errMu   sync.Mutex
 	fillErr error
+
+	// done stops the background filler when the chain is discarded.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewPrivateKeyChain creates a chain seeded with fresh system entropy.
@@ -348,9 +356,18 @@ func NewPrivateKeyChain() (*PrivateKeyChain, error) {
 	chain := &PrivateKeyChain{
 		batches: make(chan *chainBatch, 1),
 		current: first,
+		done:    make(chan struct{}),
 	}
 	go chain.filler()
 	return chain, nil
+}
+
+// Close stops the background filler and releases the chain. Callers must call
+// it on every chain they stop using: the filler blocks holding a prebuilt
+// batch, so a dropped chain would leak both a goroutine and its batch memory.
+// Close is safe to call more than once.
+func (c *PrivateKeyChain) Close() {
+	c.closeOnce.Do(func() { close(c.done) })
 }
 
 // filler prefills batches in the background. On error it records the error
@@ -367,6 +384,8 @@ func (c *PrivateKeyChain) filler() {
 		}
 		select {
 		case c.batches <- batch:
+		case <-c.done:
+			return
 		}
 	}
 }
@@ -446,6 +465,12 @@ func batchAffine(points []secp256k1.JacobianPoint, z2, z3, prod, prefix []secp25
 // 64-byte X || Y concatenation (no 0x04 prefix).
 func (c *PrivateKeyChain) NextKey() ([32]byte, [64]byte, error) {
 	if c.pos >= ChainBatchSize {
+		select {
+		case <-c.done:
+			return [32]byte{}, [64]byte{}, fmt.Errorf("private key chain is closed")
+		default:
+		}
+
 		batch, ok := <-c.batches
 		if !ok {
 			err := c.fillErrSnapshot()

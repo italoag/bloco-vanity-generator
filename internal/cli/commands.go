@@ -33,6 +33,12 @@ type Application struct {
 	version   string
 	gitCommit string
 	buildTime string
+
+	// output holds the resolved --output/--format settings, and collected
+	// gathers the results so they can be serialized once the run finishes.
+	output    outputConfig
+	collected resultCollector
+	secrets   secretCollector
 }
 
 // NewApplication creates a new CLI application
@@ -108,6 +114,10 @@ func (app *Application) addGlobalFlags() {
 	flags.String("keystore-kdf", "scrypt", "KDF algorithm for keystore encryption (scrypt, pbkdf2, pbkdf2-sha256, pbkdf2-sha512)")
 	flags.String("kdf-params", "", "Custom KDF parameters as JSON (e.g., '{\"n\":262144,\"r\":8,\"p\":1,\"dklen\":32}}' for scrypt)")
 	flags.Bool("kdf-analysis", false, "Show KDF compatibility analysis and security assessment")
+	flags.Bool("write-password-file", false,
+		"Also write the keystore password to <address>.pwd (INSECURE: stores the password next to the keystore it unlocks)")
+	flags.Bool("write-plaintext-key", false,
+		"Also write the raw private key to <address>.key for Solana (INSECURE: unencrypted key material on disk)")
 	flags.String("security-level", "medium", "Minimum security level for KDF parameters (low, medium, high, very-high)")
 
 	// Secure logging parameters (never logs sensitive data)
@@ -187,11 +197,78 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 	}
 
 	// Generate wallets
+	var genErr error
 	if count == 1 {
-		return app.generateSingleWallet(ctx, workerPool, criteria, showProgress, engineInfo)
+		genErr = app.generateSingleWallet(ctx, workerPool, criteria, showProgress, engineInfo)
 	} else {
-		return app.generateMultipleWallets(ctx, workerPool, criteria, count, showProgress, engineInfo)
+		genErr = app.generateMultipleWallets(ctx, workerPool, criteria, count, showProgress, engineInfo)
 	}
+	if genErr != nil {
+		return genErr
+	}
+
+	return app.flushResultsOutput()
+}
+
+// flushResultsOutput serializes the collected results according to --output and
+// --format. With --output set the material goes to a file with owner-only
+// permission instead of the terminal scrollback.
+func (app *Application) flushResultsOutput() error {
+	results := app.collected.Results()
+	if len(results) == 0 {
+		return nil
+	}
+
+	passwords := app.secrets.Passwords()
+
+	// Without --output, only the machine-readable formats add anything: text
+	// mode has already been printed by the display functions.
+	if !app.output.WritesFile() && app.output.Format == outputFormatText {
+		app.printKeystorePasswords(passwords)
+		return nil
+	}
+
+	rendered, err := renderResults(results, app.output.Format, passwords)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"render_results", "failed to render generation results")
+	}
+
+	if !app.output.WritesFile() {
+		_, err := os.Stdout.Write(rendered)
+		return err
+	}
+
+	if err := writeResultsFile(app.output.Path, rendered); err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"write_results", "failed to write generation results")
+	}
+
+	if !app.config.CLI.QuietMode {
+		fmt.Printf("Results written to %s (%d wallet(s), mode %04o)\n",
+			app.output.Path, len(results), crypto.DefaultKeyStoreFilePerm)
+	}
+
+	return nil
+}
+
+// printKeystorePasswords shows the generated keystore passwords once, at the
+// end of the run so it does not interfere with the TUI. Without
+// --write-password-file the password is not stored anywhere, so this is the
+// only chance the user has to keep it — losing it means losing the keystore.
+func (app *Application) printKeystorePasswords(passwords map[string]string) {
+	if len(passwords) == 0 || app.config.KeyStore.WritePasswordFile || app.config.CLI.QuietMode {
+		return
+	}
+
+	fmt.Printf("\nKeystore password(s) - store these now, they are not saved to disk:\n")
+	for _, result := range app.collected.Results() {
+		if password, ok := passwords[result.Wallet.Address]; ok {
+			fmt.Printf("  %s: %s\n", result.Wallet.Address, password)
+		}
+	}
+	fmt.Printf("Re-run with --write-password-file to save them next to the keystore " +
+		"(insecure: it nullifies the keystore encryption).\n")
 }
 
 // willUseTUI mirrors the decision used by generateSingleWallet and
@@ -390,6 +467,7 @@ func (app *Application) generateSingleWalletTUI(
 		}
 
 		result = genResult
+		app.collected.Record(genResult)
 
 		// Generate and save keystore files if enabled (silent mode for TUI)
 		if app.config.KeyStore.Enabled {
@@ -469,6 +547,8 @@ func (app *Application) generateSingleWalletText(
 	if showProgress && !app.config.CLI.QuietMode {
 		fmt.Printf("\n")
 	}
+
+	app.collected.Record(result)
 
 	// Display result
 	return app.displayWalletResult(result, showProgress)
@@ -690,6 +770,7 @@ func (app *Application) generateMultipleWalletsTUI(
 			}
 
 			results = append(results, result)
+			app.collected.Record(result)
 
 			// Generate and save keystore files if enabled (silent mode for TUI)
 			if app.config.KeyStore.Enabled {
@@ -775,6 +856,7 @@ func (app *Application) generateMultipleWalletsText(
 		}
 
 		results = append(results, result)
+		app.collected.Record(result)
 		totalAttempts += result.Attempts
 
 		// Mark wallet as completed
@@ -1193,6 +1275,17 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 		}
 	}
 
+	// Parse output destination and format
+	outputPath, _ := cmd.Flags().GetString("output")
+	outputFormat, _ := cmd.Flags().GetString("format")
+	resolvedOutput, err := resolveOutputConfig(outputPath, outputFormat)
+	if err != nil {
+		return err
+	}
+	app.output = resolvedOutput
+	app.collected.Reset()
+	app.secrets.Reset()
+
 	// Parse output options
 	if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
 		app.config.CLI.VerboseOutput = true
@@ -1215,6 +1308,9 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 	if noKeystore, _ := cmd.Flags().GetBool("no-keystore"); noKeystore {
 		app.config.KeyStore.Enabled = false
 	}
+
+	app.config.KeyStore.WritePasswordFile, _ = cmd.Flags().GetBool("write-password-file")
+	app.config.KeyStore.WritePlaintextKey, _ = cmd.Flags().GetBool("write-plaintext-key")
 
 	// Only update keystore directory if the flag was explicitly set by the user
 	if cmd.Flags().Changed("keystore-dir") {
@@ -1371,6 +1467,14 @@ func (app *Application) validateScryptParams(params map[string]interface{}) erro
 		return fmt.Errorf("r parameter must be a number")
 	}
 
+	// Enforce the shared security floor. N alone is not enough: N=1024 with
+	// r=1 is only 128 KiB of memory and is trivially brute-forced.
+	nFloat, _ := params["n"].(float64)
+	rFloat, _ := params["r"].(float64)
+	if err := crypto.ValidateScryptSecurityFloor(int(nFloat), int(rFloat)); err != nil {
+		return err
+	}
+
 	// Validate p parameter
 	if p, ok := params["p"].(float64); ok {
 		pInt := int(p)
@@ -1407,8 +1511,8 @@ func (app *Application) validatePBKDF2Params(params map[string]interface{}) erro
 	// Validate c parameter (iteration count)
 	if c, ok := params["c"].(float64); ok {
 		cInt := int(c)
-		if cInt < 100000 {
-			return fmt.Errorf("c parameter (iteration count) must be at least 100000 for security, got %d", cInt)
+		if err := crypto.ValidatePBKDF2SecurityFloor(cInt); err != nil {
+			return err
 		}
 		if cInt > 10000000 {
 			return fmt.Errorf("c parameter (iteration count) too high (max 10000000), got %d", cInt)
@@ -1669,9 +1773,15 @@ func formatBool(b bool) string {
 func (app *Application) displayWalletResult(result *wallet.GenerationResult, showProgress bool) error {
 	fmt.Printf("Wallet generated successfully!\n")
 	fmt.Printf("Address: %s\n", result.Wallet.Address)
-	fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
-	if result.Wallet.Mnemonic != "" {
-		fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+	// With --output the secret material goes to the file instead of the
+	// terminal, where it would linger in scrollback and session recordings.
+	if app.output.WritesFile() {
+		fmt.Printf("Private Key: (written to %s)\n", app.output.Path)
+	} else {
+		fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
+		if result.Wallet.Mnemonic != "" {
+			fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+		}
 	}
 	fmt.Printf("Attempts: %s\n", formatLargeNumber(result.Attempts))
 	fmt.Printf("Duration: %v\n", result.Duration)
@@ -1717,8 +1827,10 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		fmt.Printf("Wallet %d:\n", i+1)
 		fmt.Printf("  Address: %s\n", result.Wallet.Address)
 
-		// Only show private key if not in quiet mode
-		if !app.config.CLI.QuietMode {
+		// Only show private key if not in quiet mode and not writing to a file
+		if app.output.WritesFile() {
+			fmt.Printf("  Private Key: (written to %s)\n", app.output.Path)
+		} else if !app.config.CLI.QuietMode {
 			fmt.Printf("  Private Key: %s\n", result.Wallet.PrivateKey)
 			if result.Wallet.Mnemonic != "" {
 				fmt.Printf("  Mnemonic: %s\n", result.Wallet.Mnemonic)
@@ -1826,38 +1938,10 @@ func (app *Application) generateAndSaveKeystore(w *wallet.Wallet) error {
 	return app.generateAndSaveKeystoreWithVerbose(w, app.config.CLI.VerboseOutput)
 }
 
-// generateAndSaveKeystoreWithVerbose generates and saves a keystore file with verbose control
-// For Bitcoin: only saves mnemonic (no KeyStore V3)
-// For Ethereum and Solana: generates KeyStore V3 or network-specific format
+// generateAndSaveKeystoreWithVerbose generates and saves a keystore file with verbose control.
+// Every network persists an encrypted KeyStore V3; a mnemonic is written
+// alongside it only when the wallet actually derives from one.
 func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, verbose bool) error {
-	// Bitcoin only saves mnemonic, no KeyStore V3
-	if strings.ToLower(w.Network) == "bitcoin" {
-		if w.Mnemonic == "" {
-			return fmt.Errorf("bitcoin wallet requires mnemonic for backup")
-		}
-
-		// Create keystore service just for saving mnemonic
-		keystoreConfig := crypto.KeyStoreConfig{
-			Enabled:         app.config.KeyStore.Enabled,
-			OutputDirectory: app.config.KeyStore.OutputDir,
-		}
-		keystoreService := crypto.NewKeyStoreService(keystoreConfig)
-		keystoreService.SetVerboseMode(verbose)
-
-		// Save only the mnemonic for Bitcoin
-		if err := keystoreService.SaveMnemonicFile(w.Address, w.Mnemonic, w.Network); err != nil {
-			if ksErr, ok := err.(*crypto.KeyStoreError); ok {
-				if ksErr.UserMessage != "" {
-					return fmt.Errorf("mnemonic save failed: %s", ksErr.UserMessage)
-				}
-				return fmt.Errorf("mnemonic save failed for address %s: %v", w.Address, err)
-			}
-			return fmt.Errorf("failed to save mnemonic file for address %s: %w", w.Address, err)
-		}
-		return nil
-	}
-
-	// For Ethereum and Solana: generate KeyStore V3 or network-specific format
 	// Create Universal KDF service for enhanced compatibility
 	kdfService := kdf.NewUniversalKDFService()
 
@@ -1882,9 +1966,14 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 		OutputDirectory: app.config.KeyStore.OutputDir,
 		KDF:             app.config.KeyStore.KDFAlgorithm,
 		KDFParams:       kdfParams,
-		Cipher:          "aes-128-ctr",
-		MaxRetries:      3,
-		RetryDelay:      100, // 100ms
+		FilePerm:        os.FileMode(app.config.KeyStore.FileMode),
+
+		WritePasswordFile:     app.config.KeyStore.WritePasswordFile,
+		WritePlaintextKeyFile: app.config.KeyStore.WritePlaintextKey,
+
+		Cipher:     "aes-128-ctr",
+		MaxRetries: 3,
+		RetryDelay: 100, // 100ms
 	}
 
 	// Create keystore service with controlled verbose logging
@@ -1916,6 +2005,11 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 			app.displayCompatibilityReport(report, verbose)
 		}
 	}
+
+	// The password is deliberately not written next to the keystore unless
+	// --write-password-file is set, so it is recorded here and surfaced once
+	// the run finishes. Without it the keystore could never be opened.
+	app.secrets.Record(w.Address, password)
 
 	// Save the generated keystore
 	if err := keystoreService.SaveKeyStoreFilesToDisk(w.Address, keystore, password, w.Network, w.PrivateKey); err != nil {

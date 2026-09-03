@@ -63,6 +63,15 @@ type KeyStoreConfig struct {
 	FileMode      int                    `yaml:"file_mode"`
 	ShowAnalysis  bool                   `yaml:"show_analysis"`
 	SecurityLevel string                 `yaml:"security_level"`
+
+	// WritePasswordFile writes the keystore password as <address>.pwd next to
+	// the keystore. Off by default: it nullifies the KDF for anyone who copies
+	// the directory.
+	WritePasswordFile bool `yaml:"write_password_file"`
+
+	// WritePlaintextKey writes the raw private key as <address>.key. Off by
+	// default for the same reason.
+	WritePlaintextKey bool `yaml:"write_plaintext_key"`
 }
 
 // LoggingConfig contains logging configuration
@@ -275,8 +284,12 @@ func (c *Config) Validate() error {
 			c.KeyStore.SecurityLevel, validSecurityLevels)
 	}
 
-	if c.KeyStore.FileMode < 0 || c.KeyStore.FileMode > 0777 {
-		return fmt.Errorf("invalid file mode: %o (must be between 0000 and 0777)", c.KeyStore.FileMode)
+	// Keystore artifacts hold private key material, so the mode may not grant
+	// anything to group or other, and may not exceed owner read/write.
+	if c.KeyStore.FileMode <= 0 || c.KeyStore.FileMode&^0o600 != 0 {
+		return fmt.Errorf(
+			"invalid keystore file mode: %04o (private key material must stay owner-only; use 0600 or 0400)",
+			c.KeyStore.FileMode)
 	}
 
 	// Validate Logging configuration
