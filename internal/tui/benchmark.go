@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -37,6 +36,19 @@ type BenchmarkModel struct {
 	quitting       bool
 	lastUpdate     time.Time
 	transitionTime time.Time
+	engineInfo     EngineInfo
+}
+
+// WithEngineInfo returns a copy of the model with engine diagnostics attached.
+// The same fields are printed in the text benchmark path; the TUI renders them
+// in both the running and results views.
+func (m BenchmarkModel) WithEngineInfo(info EngineInfo) BenchmarkModel {
+	m.engineInfo = info
+	return m
+}
+
+func (m BenchmarkModel) Quitting() bool {
+	return m.quitting
 }
 
 // BenchmarkUpdateMsg represents a benchmark update message
@@ -128,34 +140,25 @@ func (m BenchmarkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case BenchmarkUpdateMsg:
-		fmt.Fprintf(os.Stderr, "DEBUG: TUI received update - attempts: %d, speed: %.2f\n", msg.Progress.Attempts, msg.Progress.Speed)
 		m.progressMsg = msg.Progress
 		m.running = msg.Running
 		m.lastUpdate = time.Now()
 
 		if msg.Results != nil {
 			m.results = msg.Results
-			if !msg.Running && m.state == BenchmarkStateProgress {
-				m.state = BenchmarkStateTransitioning
-				m.transitionTime = time.Now()
+			if !msg.Running {
+				m.state = BenchmarkStateResults
+				m.table.SetRows(m.generateResultsRows())
 			}
 		}
 
 	case BenchmarkCompleteMsg:
 		m.results = msg.Results
 		m.running = false
-		m.state = BenchmarkStateTransitioning
-		m.transitionTime = time.Now()
+		m.state = BenchmarkStateResults
+		m.table.SetRows(m.generateResultsRows())
 
 	case TickMsg:
-		// Handle smooth transitions
-		if m.state == BenchmarkStateTransitioning {
-			if time.Since(m.transitionTime) > 500*time.Millisecond {
-				m.state = BenchmarkStateResults
-				m.table.SetRows(m.generateResultsRows())
-			}
-		}
-
 		// Continue ticking for animations
 		cmds = append(cmds, tickCmd())
 
@@ -184,9 +187,9 @@ func (m BenchmarkModel) View() string {
 	case BenchmarkStateProgress:
 		return m.renderProgressView()
 	case BenchmarkStateTransitioning:
-		return m.renderTransitionView()
+		return m.renderProgressView()
 	case BenchmarkStateResults:
-		return m.renderResultsView()
+		return m.renderProgressView()
 	default:
 		return m.renderProgressView()
 	}
@@ -201,32 +204,31 @@ func (m BenchmarkModel) renderProgressView() string {
 	b.WriteString("\n")
 
 	// Header
-	header := m.styleManager.FormatHeader("Benchmark Running")
+	headerText := "Benchmark Running"
+	if m.state == BenchmarkStateResults {
+		headerText = "Benchmark Complete"
+	}
+	header := m.styleManager.FormatHeader(headerText)
 	b.WriteString(header + "\n\n")
 
-	// Progress bar
-	if m.progressMsg.Attempts > 0 {
-		// Calculate progress percentage based on attempts vs estimated total
-		// Use a more sophisticated progress calculation
-		var progressPercent float64
-		if m.progressMsg.EstimatedTime > 0 && m.progressMsg.Speed > 0 {
-			// Calculate based on time elapsed vs estimated time
-			totalEstimatedAttempts := float64(m.progressMsg.EstimatedTime.Seconds()) * m.progressMsg.Speed
-			if totalEstimatedAttempts > 0 {
-				progressPercent = float64(m.progressMsg.Attempts) / totalEstimatedAttempts
-			}
-		} else {
-			// Fallback: use a rough estimate based on attempts
-			progressPercent = float64(m.progressMsg.Attempts) / 50000.0 // Assume max 50k attempts
-		}
+	// Engine diagnostics (matches the text-mode benchmark header)
+	if block := m.renderEngineInfoBlock(pad); block != "" {
+		b.WriteString(block)
+		b.WriteString("\n")
+	}
 
+	// Progress bar
+	if m.progressMsg.Attempts > 0 || m.progressMsg.ProgressPercent > 0 || m.progressMsg.IsComplete {
+		progressPercent := m.progressMsg.ProgressPercent / 100.0
+		if m.progressMsg.IsComplete || m.state == BenchmarkStateResults {
+			progressPercent = 1.0
+		}
 		if progressPercent > 1.0 {
 			progressPercent = 1.0
 		}
 		if progressPercent < 0 {
 			progressPercent = 0
 		}
-
 		progressBar := m.progress.ViewAs(progressPercent)
 		b.WriteString(progressBar + "\n\n")
 	}
@@ -277,8 +279,18 @@ func (m BenchmarkModel) renderProgressView() string {
 
 	b.WriteString(metricsStyle.Render(metrics) + "\n\n")
 
+	if m.results != nil {
+		b.WriteString(pad)
+		b.WriteString(m.styleManager.FormatSubtitle("Results"))
+		b.WriteString("\n")
+		tableStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(PrimaryColor))
+		b.WriteString(tableStyle.Render(m.table.View()) + "\n\n")
+	}
+
 	// Help text
-	helpText := helpStyle("Press q to quit • Ctrl+C to exit")
+	helpText := helpStyle("↑/↓: Navigate results • q: Quit • Ctrl+C: Exit")
 	b.WriteString(helpText)
 
 	return b.String()
@@ -310,6 +322,12 @@ func (m BenchmarkModel) renderResultsView() string {
 	// Header
 	header := m.styleManager.FormatHeader("Benchmark Results")
 	b.WriteString(header + "\n\n")
+
+	// Engine diagnostics (matches the text-mode benchmark header)
+	if block := m.renderEngineInfoBlock(pad); block != "" {
+		b.WriteString(block)
+		b.WriteString("\n")
+	}
 
 	// Results summary
 	if m.results != nil {
@@ -344,6 +362,28 @@ func (m BenchmarkModel) renderResultsView() string {
 	helpText := helpStyle("↑/↓: Navigate • q: Quit • Ctrl+C: Exit")
 	b.WriteString(helpText)
 
+	return b.String()
+}
+
+// renderEngineInfoBlock renders the engine diagnostics block for the benchmark
+// views. It mirrors the fields emitted in runBenchmarkText so users see the
+// same engine, device and batch context regardless of TUI vs text mode.
+func (m BenchmarkModel) renderEngineInfoBlock(pad string) string {
+	if m.engineInfo.IsZero() {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(pad)
+	b.WriteString(m.styleManager.FormatSubtitle("Engine"))
+	b.WriteString("\n")
+
+	rows := engineInfoRows(m.engineInfo)
+	for _, row := range rows {
+		b.WriteString(pad)
+		b.WriteString(m.styleManager.FormatKeyValue(row.label, row.value))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

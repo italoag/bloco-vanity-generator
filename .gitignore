@@ -7,3 +7,5 @@ build/
 references/
 keystores/
 .crush/
+/bloco-vgen
+bloco-vgen-*

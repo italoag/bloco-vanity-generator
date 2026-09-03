@@ -3,10 +3,8 @@ package worker
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/rand"
 	"fmt"
 	"math/big"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +12,10 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	bip32 "github.com/tyler-smith/go-bip32"
 	"github.com/tyler-smith/go-bip39"
-	"golang.org/x/crypto/sha3"
 
 	"bloco-vgen/internal/config"
 	"bloco-vgen/internal/crypto"
+	"bloco-vgen/internal/vanity"
 	"bloco-vgen/pkg/errors"
 	"bloco-vgen/pkg/logging"
 	"bloco-vgen/pkg/wallet"
@@ -35,6 +33,8 @@ type Pool struct {
 	statsCancel    context.CancelFunc
 	poolManager    *crypto.PoolManager
 	generator      crypto.Generator
+	chains         []*crypto.PrivateKeyChain // reused across generation calls
+	chainsMu       sync.Mutex
 }
 
 const (
@@ -139,6 +139,9 @@ func (p *Pool) Shutdown() error {
 		p.statsCancel()
 	}
 
+	// Release the per-worker key chains and their background fillers.
+	p.closeChains()
+
 	// Close the logger if it exists
 	if p.logger != nil {
 		if err := p.logger.Close(); err != nil {
@@ -152,6 +155,64 @@ func (p *Pool) Shutdown() error {
 // GetStatsCollector returns the stats collector
 func (p *Pool) GetStatsCollector() *StatsCollector {
 	return p.statsCollector
+}
+
+// mnemonicWalletGenerator is implemented by generators that can produce a
+// wallet whose private key is actually derived from the mnemonic they return,
+// so the mnemonic is a usable backup.
+type mnemonicWalletGenerator interface {
+	GenerateWalletFromMnemonic() (*wallet.Wallet, error)
+}
+
+// getChain returns the chained key generator for a worker, creating it on
+// first use. Chains are reused across GenerateWalletWithContext calls so
+// batch generation does not rebuild the (expensive) point chain per wallet.
+func (p *Pool) getChain(workerID int) (*crypto.PrivateKeyChain, error) {
+	p.chainsMu.Lock()
+	defer p.chainsMu.Unlock()
+	if workerID < len(p.chains) && p.chains[workerID] != nil {
+		return p.chains[workerID], nil
+	}
+	for len(p.chains) <= workerID {
+		p.chains = append(p.chains, nil)
+	}
+	chain, err := crypto.NewPrivateKeyChain()
+	if err != nil {
+		return nil, err
+	}
+	p.chains[workerID] = chain
+	return chain, nil
+}
+
+// retireChain discards the chain a worker just delivered a wallet from.
+//
+// Keys inside one chain batch are consecutive scalars (k0, k0+1, ...), so two
+// wallets handed to the user from the same chain would be trivially derivable
+// from one another: whoever holds one key recovers the other by adding a small
+// integer. Retiring the chain on delivery guarantees every delivered key comes
+// from its own independent seed. The keys the chain produced but discarded
+// during the search were never handed out, so they carry no such exposure.
+func (p *Pool) retireChain(workerID int) {
+	p.chainsMu.Lock()
+	defer p.chainsMu.Unlock()
+
+	if workerID < len(p.chains) && p.chains[workerID] != nil {
+		p.chains[workerID].Close()
+		p.chains[workerID] = nil
+	}
+}
+
+// closeChains releases every chain the pool holds.
+func (p *Pool) closeChains() {
+	p.chainsMu.Lock()
+	defer p.chainsMu.Unlock()
+
+	for i, chain := range p.chains {
+		if chain != nil {
+			chain.Close()
+			p.chains[i] = nil
+		}
+	}
 }
 
 // GenerateWalletWithContext generates a wallet using the worker pool
@@ -184,6 +245,9 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 			attempts := int64(0)
 			startTime := time.Now()
 			lastStatsUpdate := startTime
+			// Per-worker chained key generator: state persists across loop
+			// iterations (each chain produces ChainBatchSize keys).
+			var chain *crypto.PrivateKeyChain
 
 			for {
 				select {
@@ -221,34 +285,45 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 
 				// Generate private key material based on generation strategy
 				var (
-					privateKey         *ecdsa.PrivateKey
-					mnemonic           string
-					err                error
-					addressStr         string
-					rawPrivateKeyBytes []byte // Added this variable as it's used later in the original code
+					privateKey *ecdsa.PrivateKey
+					mnemonic   string
+					err        error
+					addressStr string
 				)
 
-				// Mnemonic generation is only supported for Ethereum
-				// Bitcoin and Solana use different key derivation schemes (secp256k1 and Ed25519)
-				if criteria.UseMnemonic && criteria.Network != "ethereum" && criteria.Network != "" {
+				// Mnemonic generation needs a generator that actually derives the
+				// key from the phrase. Ethereum is handled below; Bitcoin
+				// implements mnemonicWalletGenerator; Solana (Ed25519) does not.
+				mnemonicCapable := false
+				if criteria.Network != "ethereum" && criteria.Network != "" {
+					_, mnemonicCapable = p.generator.(mnemonicWalletGenerator)
+				}
+
+				if criteria.UseMnemonic && criteria.Network != "ethereum" && criteria.Network != "" && !mnemonicCapable {
 					if p.logger != nil {
 						context := map[string]interface{}{
 							"worker_id": workerID,
 							"network":   criteria.Network,
 						}
 						if logErr := p.logger.LogError("unsupported_mnemonic_network",
-							fmt.Errorf("mnemonic generation is only supported for Ethereum network"), context); logErr != nil {
+							fmt.Errorf("mnemonic generation is not supported for this network"), context); logErr != nil {
 							_ = logErr
 						}
 					}
-					// Skip mnemonic generation for non-Ethereum networks
+					// Skip mnemonic generation where the key cannot be derived from it
 					criteria.UseMnemonic = false
 				}
 
 				// For non-Ethereum networks, use the generator directly
 				if criteria.Network != "ethereum" && criteria.Network != "" {
 					// Use the generator to create a complete wallet
-					genWallet, err := p.generator.GenerateWallet()
+					var genWallet *wallet.Wallet
+					var err error
+					if criteria.UseMnemonic && mnemonicCapable {
+						genWallet, err = p.generator.(mnemonicWalletGenerator).GenerateWalletFromMnemonic()
+					} else {
+						genWallet, err = p.generator.GenerateWallet()
+					}
 					if err != nil {
 						if p.logger != nil {
 							context := map[string]interface{}{
@@ -326,15 +401,31 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 					}
 
 				} else {
-					// Optimized path using AddressGenerator and object pooling
-					// Get private key buffer from pool
-					cryptoPool := p.poolManager.GetCryptoPool()
-					privateKeyBytes := cryptoPool.GetPrivateKeyBuffer()
+					// Fast path using the chained private key generator: each
+					// worker derives keys from a random seed as k0, k0+1, ...
+					// with incremental point addition (P + G) and a single
+					// batched field inversion per batch. This is much faster
+					// than one full scalar multiplication per key.
+					if chain == nil {
+						chain, err = p.getChain(workerID)
+						if err != nil {
+							if p.logger != nil {
+								context := map[string]interface{}{
+									"worker_id": workerID,
+									"attempts":  attempts,
+								}
+								if logErr := p.logger.LogError("crypto_key_generation", err, context); logErr != nil {
+									_ = logErr
+								}
+							}
+							continue
+						}
+					}
 
-					// Generate random private key
-					_, err := rand.Read(privateKeyBytes)
+					var keyBytes [32]byte
+					var pub [64]byte
+					keyBytes, pub, err = chain.NextKey()
 					if err != nil {
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
 						if p.logger != nil {
 							context := map[string]interface{}{
 								"worker_id": workerID,
@@ -347,46 +438,37 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 						continue
 					}
 
-					// Generate address using generator
-					addressStr, err = p.generator.GenerateAddressFromPrivateKey(privateKeyBytes)
-					if err != nil {
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
-						if p.logger != nil {
-							context := map[string]interface{}{
-								"worker_id": workerID,
-								"attempts":  attempts,
-							}
-							if logErr := p.logger.LogError("address_generation", err, context); logErr != nil {
-								_ = logErr
-							}
+					// Match against the pattern using raw address bytes for
+					// case-insensitive patterns; EIP-55 checksum patterns still
+					// need the checksummed string.
+					addressBytes := crypto.AddressFromPublicKey(&pub)
+					rawAddress := formatEthereumAddressBytes(addressBytes)
+					if criteria.IsChecksum {
+						addressStr = toChecksumAddress(rawAddress)
+						if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
+							continue
 						}
-						continue
-					}
-
-					// If we found a match, we need to reconstruct the full private key object for the result
-					// Otherwise we just return the buffer to the pool
-					if matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
-						// Only reconstruct ECDSA private key for Ethereum
-						// For Solana and Bitcoin, we'll use the raw bytes directly
-						if criteria.Network == "ethereum" || criteria.Network == "" {
-							// Reconstruct private key for result (Ethereum only)
-							privateKey = new(ecdsa.PrivateKey)
-							privateKey.Curve = ethcrypto.S256()
-							privateKey.D = new(big.Int).SetBytes(privateKeyBytes)
-							privateKey.X, privateKey.Y = ethcrypto.S256().ScalarBaseMult(privateKeyBytes)
-						} else {
-							// For non-Ethereum, store the raw bytes
-							rawPrivateKeyBytes = make([]byte, len(privateKeyBytes))
-							copy(rawPrivateKeyBytes, privateKeyBytes)
-						}
-
-						// We can return the buffer now as we've copied it to big.Int (or we don't need it for non-Ethereum)
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
 					} else {
-						// No match, return buffer and continue
-						p.poolManager.GetCryptoPool().PutPrivateKeyBuffer(privateKeyBytes)
-						continue
+						prefixNibbles, suffixNibbles := crypto.NibblePatterns(criteria.Prefix, criteria.Suffix)
+						if (criteria.Prefix != "" || criteria.Suffix != "") && prefixNibbles == nil {
+							// Invalid pattern: fall back to the string matcher
+							addressStr = rawAddress
+							if !matchesCriteria(addressStr, criteria.Prefix, criteria.Suffix, criteria.IsChecksum, criteria.Network, criteria.CaseSensitive) {
+								continue
+							}
+						} else if !crypto.MatchesAddressNibbles(&addressBytes, prefixNibbles, suffixNibbles) {
+							continue
+						} else {
+							addressStr = rawAddress
+						}
 					}
+
+					// Found a match: reconstruct the ECDSA private key for the
+					// result (Ethereum only).
+					privateKey = new(ecdsa.PrivateKey)
+					privateKey.Curve = ethcrypto.S256()
+					privateKey.D = new(big.Int).SetBytes(keyBytes[:])
+					privateKey.X, privateKey.Y = ethcrypto.S256().ScalarBaseMult(keyBytes[:])
 				}
 
 				// Check if address matches criteria (re-check for mnemonic path, or use result from optimized path)
@@ -442,6 +524,12 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 
 				select {
 				case resultCh <- result:
+					// This key is now the user's wallet. Retire the chain it
+					// came from so no later wallet is a small offset away from
+					// it (see Pool.retireChain).
+					if chain != nil {
+						p.retireChain(workerID)
+					}
 				case <-ctx.Done():
 				}
 				return
@@ -552,202 +640,31 @@ func generateMnemonicPrivateKey() (string, *ecdsa.PrivateKey, error) {
 // matchesCriteria checks if an address matches the given prefix and suffix criteria
 // It performs a fast string check first, and only calculates checksum if necessary
 func matchesCriteria(address, prefix, suffix string, isChecksum bool, network string, caseSensitivePattern ...bool) bool {
-	// 1. Fast filter: Check pattern on raw address
-	// We want to avoid expensive checksum calculation if the basic letters don't match
-
-	// Handle 0x prefix for string checking
-	addrWithoutPrefix := address
-	if strings.HasPrefix(address, "0x") {
-		addrWithoutPrefix = address[2:]
-	}
-
-	if isChecksum && (network == "ethereum" || network == "") {
-		checksumAddress := toChecksumAddress(address)
-		if strings.HasPrefix(checksumAddress, "0x") {
-			addrWithoutPrefix = checksumAddress[2:]
-		} else {
-			addrWithoutPrefix = checksumAddress
-		}
-	}
-
-	// Determine matching mode based on network
-	// Ethereum is case-insensitive by default (unless checksum is checked later)
-	// Bitcoin and Solana are case-sensitive (Base58)
-	caseSensitive := network == "bitcoin" || network == "solana"
-	if len(caseSensitivePattern) > 0 && caseSensitivePattern[0] {
-		caseSensitive = true
-	}
-
-	// Check prefix
-	if prefix != "" {
-		if len(addrWithoutPrefix) < len(prefix) {
-			return false
-		}
-		prefixPart := addrWithoutPrefix[:len(prefix)]
-
-		match := false
-		if caseSensitive {
-			match = prefixPart == prefix
-		} else {
-			match = strings.EqualFold(prefixPart, prefix)
-		}
-
-		if !match {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG: Prefix check failed: %q does not start with %q (case-sensitive: %v)\n",
-					prefixPart, prefix, caseSensitive)
-			}
-			return false
-		}
-	}
-
-	// Check suffix
-	if suffix != "" {
-		if len(addrWithoutPrefix) < len(suffix) {
-			return false
-		}
-		suffixPart := addrWithoutPrefix[len(addrWithoutPrefix)-len(suffix):]
-
-		match := false
-		if caseSensitive {
-			match = suffixPart == suffix
-		} else {
-			match = strings.EqualFold(suffixPart, suffix)
-		}
-
-		if !match {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG: Suffix check failed: %q does not end with %q (case-sensitive: %v)\n",
-					suffixPart, suffix, caseSensitive)
-			}
-			return false
-		}
-	}
-
-	// 2. If pattern matches, AND checksum is required, then calculate/verify checksum
-	// Note: For Bitcoin/Solana, case sensitivity is already handled above, so isChecksum mainly implies
-	// strict validation if applicable, but for Ethereum it triggers EIP-55 check.
-	if isChecksum && (prefix != "" || suffix != "") {
-		// Only Ethereum uses EIP-55 mixed-case checksum
-		if network == "ethereum" || network == "" {
-			result := isEIP55Checksum(address, prefix, suffix)
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG: EIP55 validation result: %v\n", result)
-			}
-			return result
-		}
-		// For other networks, we already did case-sensitive check, so we are good
-		return true
-	}
-
-	if os.Getenv("BLOCO_DEBUG") != "" {
-		fmt.Printf("DEBUG: Address validation passed\n")
-	}
-	return true
+	return vanity.MatchesCriteria(address, prefix, suffix, isChecksum, network, caseSensitivePattern...)
 }
 
 // toChecksumAddress converts an address to EIP-55 checksum format
 func toChecksumAddress(address string) string {
-	if !strings.HasPrefix(address, "0x") {
-		address = "0x" + address
+	return vanity.ToChecksumAddress(address)
+}
+
+// formatEthereumAddressBytes formats raw address bytes as a lowercase
+// 0x-prefixed hex string without allocations on the hot path.
+func formatEthereumAddressBytes(addressBytes [20]byte) string {
+	const hexChars = "0123456789abcdef"
+	var out [42]byte
+	out[0] = '0'
+	out[1] = 'x'
+	for i := 0; i < 20; i++ {
+		out[2+i*2] = hexChars[addressBytes[i]>>4]
+		out[3+i*2] = hexChars[addressBytes[i]&0x0f]
 	}
-
-	// Remove 0x prefix for hashing
-	addrWithoutPrefix := strings.ToLower(address[2:])
-	addrBytes := []byte(addrWithoutPrefix)
-
-	// Create Keccak256 hash
-	hasher := sha3.NewLegacyKeccak256()
-	hasher.Write(addrBytes)
-	hash := hasher.Sum(nil)
-
-	// Apply EIP-55 checksum
-	var result strings.Builder
-	result.WriteString("0x")
-
-	for i, char := range addrWithoutPrefix {
-		if char >= '0' && char <= '9' {
-			// Numbers remain unchanged
-			result.WriteByte(byte(char))
-		} else if char >= 'a' && char <= 'f' {
-			// Letters: uppercase if hash bit >= 8, lowercase otherwise
-			hashByte := hash[i/2]
-			var hashBit uint8
-			if i%2 == 0 {
-				hashBit = hashByte >> 4
-			} else {
-				hashBit = hashByte & 0x0f
-			}
-
-			if hashBit >= 8 {
-				result.WriteByte(byte(char - 32)) // Convert to uppercase
-			} else {
-				result.WriteByte(byte(char)) // Keep lowercase
-			}
-		}
-	}
-
-	return result.String()
+	return string(out[:])
 }
 
 // isEIP55Checksum validates EIP-55 checksum for specific pattern
 func isEIP55Checksum(address, prefix, suffix string) bool {
-	if !strings.HasPrefix(address, "0x") {
-		address = "0x" + address
-	}
-
-	// Generate the correct checksum address
-	checksumAddr := toChecksumAddress(address)
-
-	if os.Getenv("BLOCO_DEBUG") != "" {
-		fmt.Printf("DEBUG EIP55: Original=%s Checksum=%s Prefix=%q Suffix=%q\n",
-			address, checksumAddr, prefix, suffix)
-	}
-
-	// Check if the pattern matches the checksum requirements
-	if prefix != "" {
-		prefixPart := checksumAddr[2 : 2+len(prefix)]
-		if !strings.EqualFold(prefixPart, prefix) {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG EIP55: Prefix failed - got %q expected %q\n", prefixPart, prefix)
-			}
-			return false
-		}
-		if os.Getenv("BLOCO_DEBUG") != "" {
-			fmt.Printf("DEBUG EIP55: Prefix matched - got %q expected %q\n", prefixPart, prefix)
-		}
-		// For EIP-55 checksum validation, we only need to verify that the pattern
-		// matches case-insensitively. The checksum correctness is already ensured
-		// by toChecksumAddress() function.
-	}
-
-	if suffix != "" {
-		suffixStart := len(checksumAddr) - len(suffix)
-		if suffixStart < 2 {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG EIP55: Suffix too long for address\n")
-			}
-			return false
-		}
-		suffixPart := checksumAddr[suffixStart:]
-		if !strings.EqualFold(suffixPart, suffix) {
-			if os.Getenv("BLOCO_DEBUG") != "" {
-				fmt.Printf("DEBUG EIP55: Suffix failed - got %q expected %q\n", suffixPart, suffix)
-			}
-			return false
-		}
-		if os.Getenv("BLOCO_DEBUG") != "" {
-			fmt.Printf("DEBUG EIP55: Suffix matched - got %q expected %q\n", suffixPart, suffix)
-		}
-		// For EIP-55 checksum validation, we only need to verify that the pattern
-		// matches case-insensitively. The checksum correctness is already ensured
-		// by toChecksumAddress() function.
-	}
-
-	if os.Getenv("BLOCO_DEBUG") != "" {
-		fmt.Printf("DEBUG EIP55: Validation passed\n")
-	}
-	return true
+	return vanity.IsEIP55Checksum(address, prefix, suffix)
 }
 
 // createLogConfigFromAppConfig converts internal config to logging package config

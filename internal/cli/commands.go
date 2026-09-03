@@ -3,8 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -17,6 +17,7 @@ import (
 	"bloco-vgen/internal/config"
 	"bloco-vgen/internal/crypto"
 	"bloco-vgen/internal/crypto/kdf"
+	"bloco-vgen/internal/engine"
 	"bloco-vgen/internal/tui"
 	"bloco-vgen/internal/validation"
 	"bloco-vgen/internal/worker"
@@ -32,6 +33,12 @@ type Application struct {
 	version   string
 	gitCommit string
 	buildTime string
+
+	// output holds the resolved --output/--format settings, and collected
+	// gathers the results so they can be serialized once the run finishes.
+	output    outputConfig
+	collected resultCollector
+	secrets   secretCollector
 }
 
 // NewApplication creates a new CLI application
@@ -57,7 +64,7 @@ func (app *Application) setupCommands() {
 	app.rootCmd = &cobra.Command{
 		Use:   "bloco-vgen",
 		Short: "High-performance Ethereum wallet generator for custom address patterns",
-		Long: `Bloco-ETH is a high-performance CLI tool for generating Ethereum wallets 
+		Long: `Bloco Vanity Generator is a high-performance CLI tool for generating Ethereum wallets 
 with custom prefixes and suffixes. It supports EIP-55 checksum validation,
 multi-threaded generation for optimal performance, automatic KeyStore V3
 file generation, and secure logging that never exposes sensitive data.`,
@@ -89,8 +96,11 @@ func (app *Application) addGlobalFlags() {
 
 	// Performance parameters
 	flags.IntP("threads", "t", 0, "Number of worker threads (0 = auto-detect)")
-	flags.Bool("progress", false, "Show progress information")
-	flags.Bool("tui", true, "Use terminal UI (when available)")
+	flags.String("engine", "auto", "Generation engine (auto, cpu, metal)")
+	flags.Int("gpu-batch-size", engine.DefaultMetalBatchSize, "Number of candidates processed per Metal generation batch")
+	flags.Bool("progress", false, "Show progress information (text mode)")
+	flags.Bool("tui", true, "Use the terminal UI (default; disable with --no-tui)")
+	flags.Bool("no-tui", false, "Disable the terminal UI and use plain text output")
 
 	// Output parameters
 	flags.BoolP("verbose", "v", false, "Enable verbose output")
@@ -104,6 +114,10 @@ func (app *Application) addGlobalFlags() {
 	flags.String("keystore-kdf", "scrypt", "KDF algorithm for keystore encryption (scrypt, pbkdf2, pbkdf2-sha256, pbkdf2-sha512)")
 	flags.String("kdf-params", "", "Custom KDF parameters as JSON (e.g., '{\"n\":262144,\"r\":8,\"p\":1,\"dklen\":32}}' for scrypt)")
 	flags.Bool("kdf-analysis", false, "Show KDF compatibility analysis and security assessment")
+	flags.Bool("write-password-file", false,
+		"Also write the keystore password to <address>.pwd (INSECURE: stores the password next to the keystore it unlocks)")
+	flags.Bool("write-plaintext-key", false,
+		"Also write the raw private key to <address>.key for Solana (INSECURE: unencrypted key material on disk)")
 	flags.String("security-level", "medium", "Minimum security level for KDF parameters (low, medium, high, very-high)")
 
 	// Secure logging parameters (never logs sensitive data)
@@ -117,8 +131,11 @@ func (app *Application) addGlobalFlags() {
 }
 
 // createWorkerPool creates an optimized worker pool with secure logging
-func (app *Application) createWorkerPool(poolManager *crypto.PoolManager, validator *validation.AddressValidator, network string) (worker.WorkerPool, error) {
-	// Create worker pool with configuration that includes logging settings
+func (app *Application) createWorkerPool(poolManager *crypto.PoolManager, validator *validation.AddressValidator, network string, selection engine.Selection, options engine.GenerationOptions) (worker.WorkerPool, error) {
+	if selection.Resolved == engine.NameMetal {
+		return worker.NewMetalPoolWithConfig(app.config.Worker.ThreadCount, app.config, options)
+	}
+
 	pool := worker.NewPoolWithConfig(app.config.Worker.ThreadCount, app.config, network)
 	return pool, nil
 }
@@ -142,6 +159,11 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 
 	count, _ := cmd.Flags().GetInt("count")
 	showProgress, _ := cmd.Flags().GetBool("progress")
+	engineSelection, generationOptions, err := app.getGenerationEngineOptions(cmd, criteria)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"resolve_engine", "failed to resolve generation engine")
+	}
 
 	// Create crypto components
 	poolManager := crypto.NewPoolManager(crypto.DefaultPoolConfig())
@@ -149,7 +171,7 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 	validator := validation.NewAddressValidator(checksumValidator)
 
 	// Create optimized worker pool using ants
-	workerPool, err := app.createWorkerPool(poolManager, validator, criteria.Network)
+	workerPool, err := app.createWorkerPool(poolManager, validator, criteria.Network, engineSelection, generationOptions)
 	if err != nil {
 		return err
 	}
@@ -166,12 +188,119 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 		}
 	}()
 
-	// Generate wallets
-	if count == 1 {
-		return app.generateSingleWallet(ctx, workerPool, criteria, showProgress)
-	} else {
-		return app.generateMultipleWallets(ctx, workerPool, criteria, count, showProgress)
+	// Build engine diagnostics once. The TUI path renders this block inside
+	// the interface, the text path keeps the original printf so both modes
+	// expose the same engine, device and batch context before generation.
+	engineInfo := newTUIEngineInfo(engineSelection, generationOptions, app.config.Worker.ThreadCount)
+	if !app.willUseTUI() {
+		app.displayGenerationEngineDiagnostics(engineSelection, generationOptions, showProgress)
 	}
+
+	// Generate wallets
+	var genErr error
+	if count == 1 {
+		genErr = app.generateSingleWallet(ctx, workerPool, criteria, showProgress, engineInfo)
+	} else {
+		genErr = app.generateMultipleWallets(ctx, workerPool, criteria, count, showProgress, engineInfo)
+	}
+	if genErr != nil {
+		return genErr
+	}
+
+	return app.flushResultsOutput()
+}
+
+// flushResultsOutput serializes the collected results according to --output and
+// --format. With --output set the material goes to a file with owner-only
+// permission instead of the terminal scrollback.
+func (app *Application) flushResultsOutput() error {
+	results := app.collected.Results()
+	if len(results) == 0 {
+		return nil
+	}
+
+	passwords := app.secrets.Passwords()
+
+	// Without --output, only the machine-readable formats add anything: text
+	// mode has already been printed by the display functions.
+	if !app.output.WritesFile() && app.output.Format == outputFormatText {
+		app.printKeystorePasswords(passwords)
+		return nil
+	}
+
+	rendered, err := renderResults(results, app.output.Format, passwords)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"render_results", "failed to render generation results")
+	}
+
+	if !app.output.WritesFile() {
+		_, err := os.Stdout.Write(rendered)
+		return err
+	}
+
+	if err := writeResultsFile(app.output.Path, rendered); err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"write_results", "failed to write generation results")
+	}
+
+	if !app.config.CLI.QuietMode {
+		fmt.Printf("Results written to %s (%d wallet(s), mode %04o)\n",
+			app.output.Path, len(results), crypto.DefaultKeyStoreFilePerm)
+	}
+
+	return nil
+}
+
+// printKeystorePasswords shows the generated keystore passwords once, at the
+// end of the run so it does not interfere with the TUI. Without
+// --write-password-file the password is not stored anywhere, so this is the
+// only chance the user has to keep it — losing it means losing the keystore.
+func (app *Application) printKeystorePasswords(passwords map[string]string) {
+	if len(passwords) == 0 || app.config.KeyStore.WritePasswordFile || app.config.CLI.QuietMode {
+		return
+	}
+
+	fmt.Printf("\nKeystore password(s) - store these now, they are not saved to disk:\n")
+	for _, result := range app.collected.Results() {
+		if password, ok := passwords[result.Wallet.Address]; ok {
+			fmt.Printf("  %s: %s\n", result.Wallet.Address, password)
+		}
+	}
+	fmt.Printf("Re-run with --write-password-file to save them next to the keystore " +
+		"(insecure: it nullifies the keystore encryption).\n")
+}
+
+// willUseTUI mirrors the decision used by generateSingleWallet and
+// generateMultipleWallets so callers can suppress duplicate text-mode
+// diagnostics when the TUI will render the same information inline.
+// The TUI is the default execution mode: it is used whenever it is enabled
+// in the config (i.e. --no-tui was not passed) and the terminal supports it.
+func (app *Application) willUseTUI() bool {
+	if app.config.CLI.QuietMode || !app.config.TUI.Enabled {
+		return false
+	}
+	return tui.NewTUIManager().ShouldUseTUI()
+}
+
+// newTUIEngineInfo builds the engine diagnostics block used by the TUI from
+// the same data displayed in text mode by displayGenerationEngineDiagnostics.
+// Metal-only fields (device, batch, validation) are populated only when the
+// resolved engine is Metal so the TUI matches the text behavior.
+func newTUIEngineInfo(selection engine.Selection, options engine.GenerationOptions, threadCount int) tui.EngineInfo {
+	info := tui.EngineInfo{
+		Engine:          selection.Resolved,
+		RequestedEngine: selection.Requested,
+		FallbackReason:  selection.FallbackReason,
+		ThreadCount:     threadCount,
+		Network:         options.Network,
+	}
+	if selection.Resolved == engine.NameMetal {
+		info.DeviceName = engine.MetalDeviceName()
+		info.BatchSize = options.BatchSize
+		info.MetalValidation = options.MetalValidation
+	}
+	return info
 }
 
 // generateSingleWallet generates a single wallet with progress tracking
@@ -180,10 +309,13 @@ func (app *Application) generateSingleWallet(
 	workerPool worker.WorkerPool,
 	criteria wallet.GenerationCriteria,
 	showProgress bool,
+	engineInfo tui.EngineInfo,
 ) error {
-	// Check if TUI should be used for progress
+	// Check if TUI should be used for progress. The TUI is the default
+	// execution mode; it is skipped only when disabled (--no-tui), in quiet
+	// mode, or when the terminal does not support it.
 	tuiManager := tui.NewTUIManager()
-	useTUI := app.config.TUI.Enabled && showProgress && !app.config.CLI.QuietMode
+	useTUI := app.config.TUI.Enabled && !app.config.CLI.QuietMode
 
 	// Debug TUI decision
 	if os.Getenv("BLOCO_DEBUG") != "" {
@@ -192,7 +324,7 @@ func (app *Application) generateSingleWallet(
 	}
 
 	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.generateSingleWalletTUI(ctx, workerPool, criteria)
+		return app.generateSingleWalletTUI(ctx, workerPool, criteria, engineInfo)
 	}
 
 	// Fallback to text mode
@@ -204,6 +336,7 @@ func (app *Application) generateSingleWalletTUI(
 	ctx context.Context,
 	workerPool worker.WorkerPool,
 	criteria wallet.GenerationCriteria,
+	engineInfo tui.EngineInfo,
 ) error {
 	// Create TUI statistics
 	difficulty := calculateDifficulty(criteria)
@@ -226,9 +359,10 @@ func (app *Application) generateSingleWalletTUI(
 	statsCollector := workerPool.GetStatsCollector()
 	statsAdapter := &StatsManagerAdapter{statsCollector}
 
-	// Create TUI progress model
+	// Create TUI progress model with engine diagnostics preloaded so the
+	// running view shows the same engine, device and batch info as text mode.
 	tuiManager := tui.NewTUIManager()
-	progressModel := tuiManager.CreateProgressModel(tuiStats, statsAdapter)
+	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
 	program := tea.NewProgram(progressModel)
@@ -333,6 +467,7 @@ func (app *Application) generateSingleWalletTUI(
 		}
 
 		result = genResult
+		app.collected.Record(genResult)
 
 		// Generate and save keystore files if enabled (silent mode for TUI)
 		if app.config.KeyStore.Enabled {
@@ -413,6 +548,8 @@ func (app *Application) generateSingleWalletText(
 		fmt.Printf("\n")
 	}
 
+	app.collected.Record(result)
+
 	// Display result
 	return app.displayWalletResult(result, showProgress)
 }
@@ -424,10 +561,13 @@ func (app *Application) generateMultipleWallets(
 	criteria wallet.GenerationCriteria,
 	count int,
 	showProgress bool,
+	engineInfo tui.EngineInfo,
 ) error {
-	// Check if TUI should be used for multiple wallets
+	// Check if TUI should be used for multiple wallets. The TUI is the
+	// default execution mode; it is skipped only when disabled (--no-tui),
+	// in quiet mode, or when the terminal does not support it.
 	tuiManager := tui.NewTUIManager()
-	useTUI := app.config.TUI.Enabled && showProgress && !app.config.CLI.QuietMode
+	useTUI := app.config.TUI.Enabled && !app.config.CLI.QuietMode
 
 	// Debug TUI decision for multiple wallets
 	if os.Getenv("BLOCO_DEBUG") != "" {
@@ -436,7 +576,7 @@ func (app *Application) generateMultipleWallets(
 	}
 
 	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.generateMultipleWalletsTUI(ctx, workerPool, criteria, count)
+		return app.generateMultipleWalletsTUI(ctx, workerPool, criteria, count, engineInfo)
 	}
 
 	// Fallback to text mode for multiple wallets
@@ -449,6 +589,7 @@ func (app *Application) generateMultipleWalletsTUI(
 	workerPool worker.WorkerPool,
 	criteria wallet.GenerationCriteria,
 	count int,
+	engineInfo tui.EngineInfo,
 ) error {
 	// Create TUI statistics
 	difficulty := calculateDifficulty(criteria)
@@ -471,9 +612,10 @@ func (app *Application) generateMultipleWalletsTUI(
 	statsCollector := workerPool.GetStatsCollector()
 	statsAdapter := &StatsManagerAdapter{statsCollector}
 
-	// Create TUI progress model
+	// Create TUI progress model with engine diagnostics preloaded so the
+	// running view shows the same engine, device and batch info as text mode.
 	tuiManager := tui.NewTUIManager()
-	progressModel := tuiManager.CreateProgressModel(tuiStats, statsAdapter)
+	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
 	program := tea.NewProgram(progressModel)
@@ -628,6 +770,7 @@ func (app *Application) generateMultipleWalletsTUI(
 			}
 
 			results = append(results, result)
+			app.collected.Record(result)
 
 			// Generate and save keystore files if enabled (silent mode for TUI)
 			if app.config.KeyStore.Enabled {
@@ -713,6 +856,7 @@ func (app *Application) generateMultipleWalletsText(
 		}
 
 		results = append(results, result)
+		app.collected.Record(result)
 		totalAttempts += result.Attempts
 
 		// Mark wallet as completed
@@ -752,22 +896,36 @@ func (app *Application) createStatsCommand() *cobra.Command {
 
 // showStats displays statistics for a pattern
 func (app *Application) showStats(cmd *cobra.Command, args []string) error {
+	if err := app.parseFlags(cmd); err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"parse_flags", "failed to parse command flags")
+	}
+
 	criteria, err := app.getGenerationCriteria(cmd)
 	if err != nil {
 		return errors.WrapError(err, errors.ErrorTypeValidation,
 			"show_stats", "invalid pattern criteria")
 	}
+	engineSelection, generationOptions, err := app.getGenerationEngineOptions(cmd, criteria)
+	if err != nil {
+		return errors.WrapError(err, errors.ErrorTypeConfiguration,
+			"resolve_engine", "failed to resolve generation engine")
+	}
+	engineInfo := newTUIEngineInfo(engineSelection, generationOptions, app.config.Worker.ThreadCount)
 
 	// Calculate statistics
 	difficulty := calculateDifficulty(criteria)
 	probability50 := calculateProbability50(difficulty)
 
-	// Check if TUI should be used
+	// Check if TUI should be used (default mode; --no-tui disables it)
 	tuiManager := tui.NewTUIManager()
 	useTUI, _ := cmd.Flags().GetBool("tui")
+	if noTUI, _ := cmd.Flags().GetBool("no-tui"); noTUI {
+		useTUI = false
+	}
 
 	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.showStatsTUI(criteria, difficulty, probability50)
+		return app.showStatsTUI(criteria, difficulty, probability50, engineInfo)
 	}
 
 	// Fallback to text mode
@@ -775,7 +933,7 @@ func (app *Application) showStats(cmd *cobra.Command, args []string) error {
 }
 
 // showStatsTUI displays statistics using TUI interface
-func (app *Application) showStatsTUI(criteria wallet.GenerationCriteria, difficulty float64, probability50 int64) error {
+func (app *Application) showStatsTUI(criteria wallet.GenerationCriteria, difficulty float64, probability50 int64, engineInfo tui.EngineInfo) error {
 	// Create TUI statistics interface
 	tuiStats := &wallet.GenerationStats{
 		Difficulty:      difficulty,
@@ -792,7 +950,7 @@ func (app *Application) showStatsTUI(criteria wallet.GenerationCriteria, difficu
 
 	// Create TUI stats model
 	tuiManager := tui.NewTUIManager()
-	statsModel := tuiManager.CreateStatsModel(tuiStats)
+	statsModel := tuiManager.CreateStatsModelWithEngine(tuiStats, engineInfo)
 
 	// Create TUI program
 	program := tea.NewProgram(statsModel, tea.WithAltScreen())
@@ -818,6 +976,13 @@ func (app *Application) showStatsText(criteria wallet.GenerationCriteria, diffic
 	fmt.Printf("Difficulty: %s\n", formatLargeNumber(int64(difficulty)))
 	fmt.Printf("50%% Probability: %s attempts\n", formatLargeNumber(probability50))
 
+	fmt.Printf("\nDetailed Statistics:\n")
+	fmt.Printf("%-22s %-30s %s\n", "Metric", "Value", "Description")
+	fmt.Printf("%s\n", strings.Repeat("─", 95))
+	for _, row := range buildStatsTextRows(criteria, difficulty, probability50) {
+		fmt.Printf("%-22s %-30s %s\n", row.metric, row.value, row.description)
+	}
+
 	// Show time estimates at different speeds
 	fmt.Printf("\nTime Estimates:\n")
 	speeds := []float64{1000, 10000, 50000, 100000}
@@ -833,6 +998,83 @@ func (app *Application) showStatsText(criteria wallet.GenerationCriteria, diffic
 	return nil
 }
 
+type statsTextRow struct {
+	metric      string
+	value       string
+	description string
+}
+
+func buildStatsTextRows(criteria wallet.GenerationCriteria, difficulty float64, probability50 int64) []statsTextRow {
+	pattern := criteria.GetPattern()
+	if pattern == "" {
+		pattern = "any"
+	}
+	baseDifficulty := utils.CalculateDifficulty(criteria.Prefix, criteria.Suffix, false)
+	rows := []statsTextRow{
+		{
+			metric:      "Pattern",
+			value:       pattern,
+			description: "The address pattern to match",
+		},
+		{
+			metric:      "Pattern Length",
+			value:       fmt.Sprintf("%d characters", criteria.GetPatternLength()),
+			description: "Number of hex characters to match",
+		},
+		{
+			metric:      "Base Difficulty",
+			value:       formatLargeNumber(int64(baseDifficulty)),
+			description: "Difficulty without checksum validation",
+		},
+		{
+			metric:      "Total Difficulty",
+			value:       formatLargeNumber(int64(difficulty)),
+			description: "Final difficulty including checksum",
+		},
+	}
+	if criteria.IsChecksum && baseDifficulty > 0 {
+		rows = append(rows, statsTextRow{
+			metric:      "Checksum Multiplier",
+			value:       fmt.Sprintf("%.1fx", difficulty/baseDifficulty),
+			description: "Difficulty increase from checksum",
+		})
+	}
+	if probability50 > 0 {
+		rows = append(rows, statsTextRow{
+			metric:      "50% Probability",
+			value:       formatLargeNumber(probability50),
+			description: "Attempts needed for 50% success chance",
+		})
+	} else {
+		rows = append(rows, statsTextRow{
+			metric:      "50% Probability",
+			value:       "Nearly impossible",
+			description: "Pattern is extremely difficult",
+		})
+	}
+	rows = append(rows, statsTextRow{
+		metric:      "Expected Attempts",
+		value:       formatLargeNumber(int64(difficulty)),
+		description: "Mathematical expectation (average)",
+	})
+	probPerAttempt := 0.0
+	if difficulty > 0 {
+		probPerAttempt = 1.0 / difficulty * 100
+	}
+	probPerAttemptStr := "0%"
+	if probPerAttempt > 0 && probPerAttempt < 0.000001 {
+		probPerAttemptStr = fmt.Sprintf("%.2e%%", probPerAttempt)
+	} else if probPerAttempt > 0 {
+		probPerAttemptStr = fmt.Sprintf("%.6f%%", probPerAttempt)
+	}
+	rows = append(rows, statsTextRow{
+		metric:      "Success Rate",
+		value:       probPerAttemptStr,
+		description: "Probability of success per attempt",
+	})
+	return rows
+}
+
 // createBenchmarkCommand creates the benchmark subcommand
 func (app *Application) createBenchmarkCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -842,53 +1084,75 @@ func (app *Application) createBenchmarkCommand() *cobra.Command {
 		RunE:  app.runBenchmark,
 	}
 
-	// Add benchmark-specific flags
+	app.addBenchmarkFlags(cmd, false)
+	compareCmd := &cobra.Command{
+		Use:   "compare",
+		Short: "Compare CPU, auto, and Metal benchmark performance",
+		Long:  "Run a benchmark comparison matrix across CPU, auto, and Metal for one or more patterns, batch sizes, and checksum modes.",
+		RunE:  app.runBenchmark,
+	}
+	app.addBenchmarkFlags(compareCmd, true)
+	cmd.AddCommand(compareCmd)
+
+	return cmd
+}
+
+func (app *Application) addBenchmarkFlags(cmd *cobra.Command, compareDefault bool) {
 	cmd.Flags().Int("attempts", 10000, "Number of attempts for benchmark")
 	cmd.Flags().Duration("duration", 30*time.Second, "Benchmark duration")
 	cmd.Flags().Bool("detailed", false, "Show detailed per-thread statistics")
-
-	return cmd
+	cmd.Flags().Int("batch-size", 5000, "Number of candidates processed per benchmark worker batch")
+	cmd.Flags().String("pattern", "", "Address prefix pattern for benchmark compatibility")
+	cmd.Flags().String("metal-validation", engine.MetalValidationFull, "Metal CPU validation mode (requires full)")
+	cmd.Flags().Bool("compare", compareDefault, "CPU vs Auto vs Metal comparison matrix")
+	cmd.Flags().String("compare-patterns", "ab,abcd,abcdef", "Comma-separated prefix patterns for comparison")
+	cmd.Flags().String("compare-batch-sizes", "1000,5000,10000", "Comma-separated batch sizes for comparison")
+	cmd.Flags().String("compare-checksums", "off,on", "Comma-separated checksum modes for comparison (off,on)")
 }
 
 // runBenchmark runs performance benchmarks
 func (app *Application) runBenchmark(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	attempts, _ := cmd.Flags().GetInt("attempts")
-	duration, _ := cmd.Flags().GetDuration("duration")
-	detailed, _ := cmd.Flags().GetBool("detailed")
+	options, err := app.getBenchmarkOptions(cmd)
+	if err != nil {
+		return err
+	}
+	if options.Compare {
+		tuiManager := tui.NewTUIManager()
+		if options.Format == benchmarkFormatText && options.Output == "" && options.UseTUI && tuiManager.ShouldUseTUI() {
+			return app.runBenchmarkComparisonTUI(ctx, options)
+		}
+		return app.runBenchmarkComparisonText(ctx, options)
+	}
 
 	// Check if TUI should be used
 	tuiManager := tui.NewTUIManager()
-	useTUI, _ := cmd.Flags().GetBool("tui")
 
-	if useTUI && tuiManager.ShouldUseTUI() {
-		return app.runBenchmarkTUI(ctx, attempts, duration, detailed)
+	if options.Format == benchmarkFormatText && options.Output == "" && options.UseTUI && tuiManager.ShouldUseTUI() {
+		return app.runBenchmarkTUI(ctx, options)
 	}
 
 	// Fallback to text mode
-	return app.runBenchmarkText(ctx, attempts, duration, detailed)
+	return app.runBenchmarkText(ctx, options)
 }
 
 // runBenchmarkTUI runs benchmark with TUI interface
-func (app *Application) runBenchmarkTUI(ctx context.Context, attempts int, duration time.Duration, detailed bool) error {
-	// Create worker pool
-	workerPool := worker.NewPool(app.config.Worker.ThreadCount, "ethereum")
-
-	// Start worker pool
-	if err := workerPool.Start(); err != nil {
-		return errors.WrapError(err, errors.ErrorTypeWorker,
-			"run_benchmark_tui", "failed to start worker pool")
+func (app *Application) runBenchmarkTUI(ctx context.Context, options benchmarkOptions) error {
+	type benchmarkTUIOutcome struct {
+		result *wallet.BenchmarkResult
+		err    error
 	}
-	defer func() {
-		if err := workerPool.Shutdown(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to shutdown worker pool: %v\n", err)
-		}
-	}()
 
-	// Create TUI benchmark model
+	// Create TUI benchmark model preloaded with engine diagnostics so the
+	// running and results views show the same engine, device and batch info
+	// emitted by runBenchmarkText.
 	tuiManager := tui.NewTUIManager()
-	benchmarkModel := tuiManager.CreateBenchmarkModel()
+	benchmarkModel := tuiManager.CreateBenchmarkModelWithEngine(newBenchmarkTUIEngineInfo(options, app.config.Worker.ThreadCount))
+
+	benchmarkCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	outcomeCh := make(chan benchmarkTUIOutcome, 1)
 
 	// Create TUI program
 	program := tea.NewProgram(benchmarkModel, tea.WithAltScreen())
@@ -896,59 +1160,92 @@ func (app *Application) runBenchmarkTUI(ctx context.Context, attempts int, durat
 	// Start benchmark in background
 	go func() {
 		// Give TUI time to initialize
-		time.Sleep(200 * time.Millisecond)
+		timer := time.NewTimer(200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-benchmarkCtx.Done():
+			outcomeCh <- benchmarkTUIOutcome{err: benchmarkCtx.Err()}
+			return
+		}
 
 		// Run benchmark and send updates to TUI
-		result, err := app.executeBenchmarkWithTUI(ctx, workerPool, attempts, duration, program)
+		result, err := app.runBenchmarkEngine(benchmarkCtx, options, 500*time.Millisecond, func(sample benchmarkSample) {
+			sendBenchmarkTUISample(program, options, sample)
+		})
 		if err != nil {
+			outcomeCh <- benchmarkTUIOutcome{err: err}
 			program.Send(tui.BenchmarkCompleteMsg{Results: nil})
 			return
 		}
+
+		outcomeCh <- benchmarkTUIOutcome{result: result}
 
 		// Send completion message
 		program.Send(tui.BenchmarkCompleteMsg{Results: result})
 	}()
 
 	// Run the TUI program
-	if _, err := program.Run(); err != nil {
+	finalModel, err := program.Run()
+	cancel()
+	outcome := <-outcomeCh
+	if err != nil {
 		// If TUI fails, fallback to text mode
 		fmt.Printf("TUI failed: %v, falling back to text mode\n", err)
-		return app.runBenchmarkText(ctx, attempts, duration, detailed)
+		return app.runBenchmarkText(ctx, options)
+	}
+
+	if outcome.err != nil {
+		if benchmarkCtx.Err() != nil && (stderrors.Is(outcome.err, context.Canceled) || stderrors.Is(outcome.err, context.DeadlineExceeded)) {
+			if model, ok := finalModel.(interface{ Quitting() bool }); ok && model.Quitting() {
+				return nil
+			}
+		}
+		return errors.WrapError(outcome.err, errors.ErrorTypeGeneration,
+			"run_benchmark", "benchmark execution failed")
+	}
+
+	if options.Output != "" && outcome.result != nil {
+		return app.writeBenchmarkOutput(outcome.result, options)
 	}
 
 	return nil
 }
 
 // runBenchmarkText runs benchmark in text mode
-func (app *Application) runBenchmarkText(ctx context.Context, attempts int, duration time.Duration, detailed bool) error {
-	fmt.Printf("Running benchmark...\n")
-	fmt.Printf("Attempts: %s\n", formatLargeNumber(int64(attempts)))
-	fmt.Printf("Duration: %v\n", duration)
-	fmt.Printf("Threads: %d\n\n", app.config.Worker.ThreadCount)
-
-	// Create worker pool
-	workerPool := worker.NewPool(app.config.Worker.ThreadCount, "ethereum")
-
-	// Start worker pool
-	if err := workerPool.Start(); err != nil {
-		return errors.WrapError(err, errors.ErrorTypeWorker,
-			"run_benchmark", "failed to start worker pool")
-	}
-	defer func() {
-		if err := workerPool.Shutdown(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to shutdown worker pool: %v\n", err)
+func (app *Application) runBenchmarkText(ctx context.Context, options benchmarkOptions) error {
+	if options.Format == benchmarkFormatText {
+		fmt.Printf("Running benchmark...\n")
+		fmt.Printf("Engine: %s\n", options.Engine)
+		if options.FallbackReason != "" {
+			fmt.Printf("Fallback: %s\n", options.FallbackReason)
 		}
-	}()
+		fmt.Printf("Network: %s\n", options.Network)
+		fmt.Printf("Pattern: %s\n", displayBenchmarkPattern(options.Criteria.GetPattern()))
+		fmt.Printf("Attempts: %s\n", formatLargeNumber(int64(options.Attempts)))
+		fmt.Printf("Duration: %v\n", options.Duration)
+		fmt.Printf("Batch Size: %d\n", options.BatchSize)
+		fmt.Printf("Threads: %d\n\n", app.config.Worker.ThreadCount)
+	}
 
-	// Run benchmark
-	result, err := app.executeBenchmark(ctx, workerPool, attempts, duration)
+	var onSample func(benchmarkSample)
+	if options.Format == benchmarkFormatText {
+		onSample = func(sample benchmarkSample) {
+			fmt.Printf("\rSample: %.0f addr/s (total: %s attempts, matches: %s)",
+				sample.Speed, formatLargeNumber(sample.Attempts), formatLargeNumber(sample.Matches))
+		}
+	}
+
+	result, err := app.runBenchmarkEngine(ctx, options, time.Second, onSample)
 	if err != nil {
 		return errors.WrapError(err, errors.ErrorTypeGeneration,
 			"run_benchmark", "benchmark execution failed")
 	}
 
-	// Display results
-	return app.displayBenchmarkResults(result, detailed)
+	if options.Format == benchmarkFormatText {
+		fmt.Printf("\nBenchmark completed!\n")
+	}
+	return app.writeBenchmarkOutput(result, options)
 }
 
 // createVersionCommand creates the version subcommand
@@ -957,7 +1254,7 @@ func (app *Application) createVersionCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Show version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Bloco-ETH %s\n", app.version)
+			fmt.Printf("Bloco Vanity Generator %s\n", app.version)
 			fmt.Printf("Git Commit: %s\n", app.gitCommit)
 			fmt.Printf("Build Time: %s\n", app.buildTime)
 		},
@@ -978,6 +1275,17 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 		}
 	}
 
+	// Parse output destination and format
+	outputPath, _ := cmd.Flags().GetString("output")
+	outputFormat, _ := cmd.Flags().GetString("format")
+	resolvedOutput, err := resolveOutputConfig(outputPath, outputFormat)
+	if err != nil {
+		return err
+	}
+	app.output = resolvedOutput
+	app.collected.Reset()
+	app.secrets.Reset()
+
 	// Parse output options
 	if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
 		app.config.CLI.VerboseOutput = true
@@ -987,7 +1295,11 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 		app.config.CLI.QuietMode = true
 	}
 
-	// Parse TUI option
+	// Parse TUI option: --no-tui disables the TUI (the default execution
+	// mode); --tui=false is kept for backwards compatibility.
+	if noTUI, _ := cmd.Flags().GetBool("no-tui"); noTUI {
+		app.config.TUI.Enabled = false
+	}
 	if tui, _ := cmd.Flags().GetBool("tui"); !tui {
 		app.config.TUI.Enabled = false
 	}
@@ -996,6 +1308,9 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 	if noKeystore, _ := cmd.Flags().GetBool("no-keystore"); noKeystore {
 		app.config.KeyStore.Enabled = false
 	}
+
+	app.config.KeyStore.WritePasswordFile, _ = cmd.Flags().GetBool("write-password-file")
+	app.config.KeyStore.WritePlaintextKey, _ = cmd.Flags().GetBool("write-plaintext-key")
 
 	// Only update keystore directory if the flag was explicitly set by the user
 	if cmd.Flags().Changed("keystore-dir") {
@@ -1152,6 +1467,14 @@ func (app *Application) validateScryptParams(params map[string]interface{}) erro
 		return fmt.Errorf("r parameter must be a number")
 	}
 
+	// Enforce the shared security floor. N alone is not enough: N=1024 with
+	// r=1 is only 128 KiB of memory and is trivially brute-forced.
+	nFloat, _ := params["n"].(float64)
+	rFloat, _ := params["r"].(float64)
+	if err := crypto.ValidateScryptSecurityFloor(int(nFloat), int(rFloat)); err != nil {
+		return err
+	}
+
 	// Validate p parameter
 	if p, ok := params["p"].(float64); ok {
 		pInt := int(p)
@@ -1188,8 +1511,8 @@ func (app *Application) validatePBKDF2Params(params map[string]interface{}) erro
 	// Validate c parameter (iteration count)
 	if c, ok := params["c"].(float64); ok {
 		cInt := int(c)
-		if cInt < 100000 {
-			return fmt.Errorf("c parameter (iteration count) must be at least 100000 for security, got %d", cInt)
+		if err := crypto.ValidatePBKDF2SecurityFloor(cInt); err != nil {
+			return err
 		}
 		if cInt > 10000000 {
 			return fmt.Errorf("c parameter (iteration count) too high (max 10000000), got %d", cInt)
@@ -1370,6 +1693,58 @@ func (app *Application) getGenerationCriteria(cmd *cobra.Command) (wallet.Genera
 	return criteria, criteria.Validate()
 }
 
+func (app *Application) getGenerationEngineOptions(cmd *cobra.Command, criteria wallet.GenerationCriteria) (engine.Selection, engine.GenerationOptions, error) {
+	requestedEngine := flagStringOrEnv(cmd, "engine", envBlocoEngine)
+	selection, err := engine.ResolveGeneration(requestedEngine, criteria)
+	if err != nil {
+		return engine.Selection{}, engine.GenerationOptions{}, err
+	}
+
+	batchSize, err := flagIntOrEnv(cmd, "gpu-batch-size", envBlocoGPUBatchSize)
+	if err != nil {
+		return engine.Selection{}, engine.GenerationOptions{}, err
+	}
+	if batchSize <= 0 {
+		return engine.Selection{}, engine.GenerationOptions{}, fmt.Errorf("gpu-batch-size must be positive, got %d", batchSize)
+	}
+
+	metalValidation, err := resolveMetalValidationConfig(cmd, selection.Resolved, engine.MetalValidationFull)
+	if err != nil {
+		return engine.Selection{}, engine.GenerationOptions{}, err
+	}
+
+	return selection, engine.GenerationOptions{
+		BatchSize:       batchSize,
+		ThreadCount:     app.config.Worker.ThreadCount,
+		Network:         criteria.Network,
+		Criteria:        criteria,
+		RequestedEngine: selection.Requested,
+		FallbackReason:  selection.FallbackReason,
+		MetalValidation: metalValidation,
+	}, nil
+}
+
+func (app *Application) displayGenerationEngineDiagnostics(selection engine.Selection, options engine.GenerationOptions, showProgress bool) {
+	if (!showProgress && !app.config.CLI.VerboseOutput) || app.config.CLI.QuietMode {
+		return
+	}
+	fmt.Printf("Engine: %s\n", selection.Resolved)
+	if selection.Requested != "" && selection.Requested != selection.Resolved {
+		fmt.Printf("Requested Engine: %s\n", selection.Requested)
+	}
+	if selection.FallbackReason != "" {
+		fmt.Printf("Fallback: %s\n", selection.FallbackReason)
+	}
+	if selection.Resolved == engine.NameMetal {
+		if deviceName := engine.MetalDeviceName(); deviceName != "" {
+			fmt.Printf("Metal Device: %s\n", deviceName)
+		}
+		fmt.Printf("GPU Batch Size: %d\n", options.BatchSize)
+		fmt.Printf("Metal Validation: %s\n", options.MetalValidation)
+	}
+	fmt.Printf("\n")
+}
+
 // Helper functions using utils package
 func calculateDifficulty(criteria wallet.GenerationCriteria) float64 {
 	return utils.CalculateDifficulty(criteria.Prefix, criteria.Suffix, criteria.IsChecksum)
@@ -1398,12 +1773,27 @@ func formatBool(b bool) string {
 func (app *Application) displayWalletResult(result *wallet.GenerationResult, showProgress bool) error {
 	fmt.Printf("Wallet generated successfully!\n")
 	fmt.Printf("Address: %s\n", result.Wallet.Address)
-	fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
-	if result.Wallet.Mnemonic != "" {
-		fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+	// With --output the secret material goes to the file instead of the
+	// terminal, where it would linger in scrollback and session recordings.
+	if app.output.WritesFile() {
+		fmt.Printf("Private Key: (written to %s)\n", app.output.Path)
+	} else {
+		fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
+		if result.Wallet.Mnemonic != "" {
+			fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+		}
 	}
 	fmt.Printf("Attempts: %s\n", formatLargeNumber(result.Attempts))
 	fmt.Printf("Duration: %v\n", result.Duration)
+	if (showProgress || app.config.CLI.VerboseOutput) && result.Engine != "" {
+		fmt.Printf("Engine: %s\n", result.Engine)
+		if result.DeviceName != "" {
+			fmt.Printf("Device: %s\n", result.DeviceName)
+		}
+		if result.BatchSize > 0 {
+			fmt.Printf("Batch Size: %d\n", result.BatchSize)
+		}
+	}
 
 	// Generate keystore if enabled
 	if app.config.KeyStore.Enabled {
@@ -1437,8 +1827,10 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		fmt.Printf("Wallet %d:\n", i+1)
 		fmt.Printf("  Address: %s\n", result.Wallet.Address)
 
-		// Only show private key if not in quiet mode
-		if !app.config.CLI.QuietMode {
+		// Only show private key if not in quiet mode and not writing to a file
+		if app.output.WritesFile() {
+			fmt.Printf("  Private Key: (written to %s)\n", app.output.Path)
+		} else if !app.config.CLI.QuietMode {
 			fmt.Printf("  Private Key: %s\n", result.Wallet.PrivateKey)
 			if result.Wallet.Mnemonic != "" {
 				fmt.Printf("  Mnemonic: %s\n", result.Wallet.Mnemonic)
@@ -1447,6 +1839,15 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 
 		fmt.Printf("  Attempts: %s\n", formatLargeNumber(result.Attempts))
 		fmt.Printf("  Duration: %s\n", formatDuration(result.Duration))
+		if (showProgress || app.config.CLI.VerboseOutput) && result.Engine != "" {
+			fmt.Printf("  Engine: %s\n", result.Engine)
+			if result.DeviceName != "" {
+				fmt.Printf("  Device: %s\n", result.DeviceName)
+			}
+			if result.BatchSize > 0 {
+				fmt.Printf("  Batch Size: %d\n", result.BatchSize)
+			}
+		}
 
 		if result.WorkerID > 0 {
 			fmt.Printf("  Worker: #%d\n", result.WorkerID)
@@ -1506,416 +1907,6 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 	return nil
 }
 
-// executeBenchmarkWithTUI runs benchmark and sends updates to TUI
-func (app *Application) executeBenchmarkWithTUI(ctx context.Context, workerPool worker.WorkerPool, attempts int, duration time.Duration, program *tea.Program) (*wallet.BenchmarkResult, error) {
-	// Create a simple generation criteria for benchmarking
-	criteria := wallet.GenerationCriteria{
-		Prefix:     "abc", // Simple pattern for benchmarking
-		Suffix:     "",
-		IsChecksum: false,
-	}
-
-	startTime := time.Now()
-	var totalAttempts int64
-	var speedSamples []float64
-	var durationSamples []time.Duration
-
-	// Get stats collector for monitoring
-	statsCollector := workerPool.GetStatsCollector()
-
-	// Run benchmark for specified duration or attempts
-	benchmarkCtx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
-
-	// Sample performance every 500ms for smoother TUI updates
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	lastAttempts := int64(0)
-	sampleCount := 0
-
-	for {
-		select {
-		case <-benchmarkCtx.Done():
-			// Benchmark completed
-			goto benchmarkComplete
-
-		case <-ticker.C:
-			// Sample current performance
-			currentStats := statsCollector.GetAggregatedStats()
-			currentAttempts := currentStats.TotalAttempts
-
-			if currentAttempts > lastAttempts {
-				speed := float64(currentAttempts-lastAttempts) / 0.5 // Per second
-				speedSamples = append(speedSamples, speed)
-				durationSamples = append(durationSamples, 500*time.Millisecond)
-
-				// Calculate current statistics
-				var avgSpeed, minSpeed, maxSpeed float64
-				if len(speedSamples) > 0 {
-					var sum float64
-					minSpeed = speedSamples[0]
-					maxSpeed = speedSamples[0]
-
-					for _, s := range speedSamples {
-						sum += s
-						if s < minSpeed {
-							minSpeed = s
-						}
-						if s > maxSpeed {
-							maxSpeed = s
-						}
-					}
-					avgSpeed = sum / float64(len(speedSamples))
-				}
-
-				// Calculate estimated time remaining
-				remainingAttempts := int64(attempts) - currentAttempts
-				var estimatedTime time.Duration
-				if avgSpeed > 0 && remainingAttempts > 0 {
-					estimatedTime = time.Duration(float64(remainingAttempts)/avgSpeed) * time.Second
-				}
-
-				// Get performance metrics
-				perfMetrics := statsCollector.GetPerformanceMetrics()
-
-				// Send update to TUI
-				program.Send(tui.BenchmarkUpdateMsg{
-					Running: true,
-					Progress: tui.ProgressMsg{
-						Attempts:      currentAttempts,
-						Speed:         speed,
-						Pattern:       criteria.GetPattern(),
-						Difficulty:    calculateDifficulty(criteria),
-						EstimatedTime: estimatedTime,
-					},
-					Results: &wallet.BenchmarkResult{
-						TotalAttempts:         currentAttempts,
-						TotalDuration:         time.Since(startTime),
-						AverageSpeed:          avgSpeed,
-						MinSpeed:              minSpeed,
-						MaxSpeed:              maxSpeed,
-						SpeedSamples:          speedSamples,
-						DurationSamples:       durationSamples,
-						ThreadCount:           perfMetrics.WorkerCount,
-						ScalabilityEfficiency: perfMetrics.EfficiencyRatio,
-						ThreadBalanceScore:    perfMetrics.ThreadBalanceScore,
-						ThreadUtilization:     perfMetrics.CPUUtilization,
-						SpeedupVsSingleThread: perfMetrics.SpeedupVsSingleThread,
-						SingleThreadSpeed:     perfMetrics.EstimatedSingleThreadSpeed,
-					},
-				})
-
-				lastAttempts = currentAttempts
-				sampleCount++
-			}
-
-			// Check if we've reached the attempt limit
-			if int(currentAttempts) >= attempts {
-				cancel()
-			}
-
-		default:
-			// Submit work continuously to keep workers busy
-			for i := 0; i < app.config.Worker.ThreadCount; i++ {
-				workItem := worker.WorkItem{
-					Criteria:  criteria,
-					BatchSize: 1000, // Smaller batch for more frequent updates
-					ID:        fmt.Sprintf("bench-%d-%d", time.Now().UnixNano(), i),
-				}
-
-				select {
-				case <-benchmarkCtx.Done():
-					goto benchmarkComplete
-				default:
-					// TODO: Implement benchmark with ants pool
-					_ = workItem // Avoid unused variable for now
-				}
-			}
-
-			// Small delay to prevent busy waiting
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-benchmarkComplete:
-	totalDuration := time.Since(startTime)
-	finalStats := statsCollector.GetAggregatedStats()
-	totalAttempts = finalStats.TotalAttempts
-
-	// Calculate final statistics
-	var avgSpeed, minSpeed, maxSpeed float64
-	if len(speedSamples) > 0 {
-		var sum float64
-		minSpeed = speedSamples[0]
-		maxSpeed = speedSamples[0]
-
-		for _, speed := range speedSamples {
-			sum += speed
-			if speed < minSpeed {
-				minSpeed = speed
-			}
-			if speed > maxSpeed {
-				maxSpeed = speed
-			}
-		}
-		avgSpeed = sum / float64(len(speedSamples))
-	}
-
-	// Get final performance metrics
-	perfMetrics := statsCollector.GetPerformanceMetrics()
-
-	return &wallet.BenchmarkResult{
-		TotalAttempts:         totalAttempts,
-		TotalDuration:         totalDuration,
-		AverageSpeed:          avgSpeed,
-		MinSpeed:              minSpeed,
-		MaxSpeed:              maxSpeed,
-		SpeedSamples:          speedSamples,
-		DurationSamples:       durationSamples,
-		ThreadCount:           perfMetrics.WorkerCount,
-		ScalabilityEfficiency: perfMetrics.EfficiencyRatio,
-		ThreadBalanceScore:    perfMetrics.ThreadBalanceScore,
-		ThreadUtilization:     perfMetrics.CPUUtilization,
-		SpeedupVsSingleThread: perfMetrics.SpeedupVsSingleThread,
-		SingleThreadSpeed:     perfMetrics.EstimatedSingleThreadSpeed,
-	}, nil
-}
-
-func (app *Application) executeBenchmark(ctx context.Context, workerPool worker.WorkerPool, attempts int, duration time.Duration) (*wallet.BenchmarkResult, error) {
-	fmt.Printf("Starting benchmark...\n")
-
-	// Create a simple generation criteria for benchmarking
-	criteria := wallet.GenerationCriteria{
-		Prefix:     "",
-		Suffix:     "",
-		IsChecksum: false,
-	}
-
-	startTime := time.Now()
-	var totalAttempts int64
-	var speedSamples []float64
-	var durationSamples []time.Duration
-
-	// Get stats collector for monitoring
-	statsCollector := workerPool.GetStatsCollector()
-
-	// Run benchmark for specified duration or attempts
-	benchmarkCtx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
-
-	// Sample performance every second
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	lastAttempts := int64(0)
-	sampleCount := 0
-
-	for {
-		select {
-		case <-benchmarkCtx.Done():
-			// Benchmark completed
-			goto benchmarkComplete
-
-		case <-ticker.C:
-			// Sample current performance
-			currentStats := statsCollector.GetAggregatedStats()
-			currentAttempts := currentStats.TotalAttempts
-
-			if currentAttempts > lastAttempts {
-				speed := float64(currentAttempts - lastAttempts)
-				speedSamples = append(speedSamples, speed)
-				durationSamples = append(durationSamples, time.Second)
-
-				fmt.Printf("\rSample %d: %.0f addr/s (total: %s attempts)",
-					sampleCount+1, speed, formatLargeNumber(currentAttempts))
-
-				lastAttempts = currentAttempts
-				sampleCount++
-			}
-
-			// Check if we've reached the attempt limit
-			if int(currentAttempts) >= attempts {
-				cancel()
-			}
-
-		default:
-			// Submit work continuously to keep workers busy
-			for i := 0; i < app.config.Worker.ThreadCount; i++ {
-				workItem := worker.WorkItem{
-					Criteria:  criteria,
-					BatchSize: 5000, // Large batch for benchmarking
-					ID:        fmt.Sprintf("bench-%d-%d", time.Now().UnixNano(), i),
-				}
-
-				select {
-				case <-benchmarkCtx.Done():
-					goto benchmarkComplete
-				default:
-					// TODO: Implement benchmark with ants pool
-					_ = workItem // Avoid unused variable for now
-				}
-			}
-
-			// Small delay to prevent busy waiting
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-benchmarkComplete:
-	totalDuration := time.Since(startTime)
-	finalStats := statsCollector.GetAggregatedStats()
-	totalAttempts = finalStats.TotalAttempts
-
-	fmt.Printf("\nBenchmark completed!\n")
-
-	// Calculate statistics
-	var avgSpeed, minSpeed, maxSpeed float64
-	if len(speedSamples) > 0 {
-		var sum float64
-		minSpeed = speedSamples[0]
-		maxSpeed = speedSamples[0]
-
-		for _, speed := range speedSamples {
-			sum += speed
-			if speed < minSpeed {
-				minSpeed = speed
-			}
-			if speed > maxSpeed {
-				maxSpeed = speed
-			}
-		}
-		avgSpeed = sum / float64(len(speedSamples))
-	}
-
-	// Get performance metrics
-	perfMetrics := statsCollector.GetPerformanceMetrics()
-
-	return &wallet.BenchmarkResult{
-		TotalAttempts:         totalAttempts,
-		TotalDuration:         totalDuration,
-		AverageSpeed:          avgSpeed,
-		MinSpeed:              minSpeed,
-		MaxSpeed:              maxSpeed,
-		SpeedSamples:          speedSamples,
-		DurationSamples:       durationSamples,
-		ThreadCount:           perfMetrics.WorkerCount,
-		ScalabilityEfficiency: perfMetrics.EfficiencyRatio,
-		ThreadBalanceScore:    perfMetrics.ThreadBalanceScore,
-		ThreadUtilization:     perfMetrics.CPUUtilization,
-		SpeedupVsSingleThread: perfMetrics.SpeedupVsSingleThread,
-		SingleThreadSpeed:     perfMetrics.EstimatedSingleThreadSpeed,
-	}, nil
-}
-
-func (app *Application) displayBenchmarkResults(result *wallet.BenchmarkResult, detailed bool) error {
-	fmt.Printf("\nBenchmark Results:\n")
-	fmt.Printf("═══════════════════════════════════════\n")
-
-	// Basic metrics
-	fmt.Printf("Total Attempts: %s\n", formatLargeNumber(result.TotalAttempts))
-	fmt.Printf("Duration: %s\n", formatDuration(result.TotalDuration))
-	fmt.Printf("Average Speed: %.0f addr/s\n", result.AverageSpeed)
-
-	if result.MinSpeed > 0 && result.MaxSpeed > 0 {
-		fmt.Printf("Speed Range: %.0f - %.0f addr/s\n", result.MinSpeed, result.MaxSpeed)
-	}
-
-	// Thread performance
-	if result.ThreadCount > 1 {
-		fmt.Printf("\nMulti-Threading Performance:\n")
-		fmt.Printf("Threads Used: %d\n", result.ThreadCount)
-		fmt.Printf("Thread Efficiency: %.1f%%\n", result.ScalabilityEfficiency*100)
-		fmt.Printf("Thread Balance: %.1f%%\n", result.ThreadBalanceScore*100)
-
-		if result.SingleThreadSpeed > 0 {
-			fmt.Printf("Estimated Single-Thread Speed: %.0f addr/s\n", result.SingleThreadSpeed)
-			fmt.Printf("Multi-Thread Speedup: %.2fx\n", result.SpeedupVsSingleThread)
-
-			idealSpeedup := float64(result.ThreadCount)
-			actualEfficiency := result.SpeedupVsSingleThread / idealSpeedup * 100
-			fmt.Printf("Parallel Efficiency: %.1f%% (%.2fx of %dx ideal)\n",
-				actualEfficiency, result.SpeedupVsSingleThread, result.ThreadCount)
-		}
-	}
-
-	// Detailed statistics
-	if detailed && len(result.SpeedSamples) > 0 {
-		fmt.Printf("\nDetailed Performance Samples:\n")
-
-		// Show first few and last few samples
-		samplesToShow := 5
-		if len(result.SpeedSamples) <= samplesToShow*2 {
-			// Show all samples if we don't have many
-			for i, speed := range result.SpeedSamples {
-				fmt.Printf("  Sample %d: %.0f addr/s\n", i+1, speed)
-			}
-		} else {
-			// Show first few
-			for i := 0; i < samplesToShow; i++ {
-				fmt.Printf("  Sample %d: %.0f addr/s\n", i+1, result.SpeedSamples[i])
-			}
-
-			fmt.Printf("  ... (%d samples omitted) ...\n", len(result.SpeedSamples)-samplesToShow*2)
-
-			// Show last few
-			for i := len(result.SpeedSamples) - samplesToShow; i < len(result.SpeedSamples); i++ {
-				fmt.Printf("  Sample %d: %.0f addr/s\n", i+1, result.SpeedSamples[i])
-			}
-		}
-
-		// Calculate variance
-		if len(result.SpeedSamples) > 1 {
-			var sum, sumSquares float64
-			for _, speed := range result.SpeedSamples {
-				sum += speed
-				sumSquares += speed * speed
-			}
-
-			mean := sum / float64(len(result.SpeedSamples))
-			variance := (sumSquares - sum*mean) / float64(len(result.SpeedSamples)-1)
-			stdDev := math.Sqrt(variance)
-
-			fmt.Printf("\nSpeed Statistics:\n")
-			fmt.Printf("  Mean: %.0f addr/s\n", mean)
-			fmt.Printf("  Std Dev: %.0f addr/s\n", stdDev)
-			fmt.Printf("  Coefficient of Variation: %.1f%%\n", stdDev/mean*100)
-		}
-	}
-
-	// Performance recommendations
-	fmt.Printf("\nPerformance Analysis:\n")
-
-	if result.ThreadCount > 1 {
-		if result.ScalabilityEfficiency > 0.8 {
-			fmt.Printf("  Excellent multi-threading efficiency\n")
-		} else if result.ScalabilityEfficiency > 0.6 {
-			fmt.Printf("  Good multi-threading efficiency\n")
-		} else {
-			fmt.Printf("  Multi-threading efficiency could be improved\n")
-		}
-
-		if result.ThreadBalanceScore > 0.8 {
-			fmt.Printf("  Well-balanced thread utilization\n")
-		} else {
-			fmt.Printf("  Uneven thread utilization detected\n")
-		}
-	}
-
-	// Speed assessment
-	if result.AverageSpeed > 100000 {
-		fmt.Printf("  Excellent performance (>100k addr/s)\n")
-	} else if result.AverageSpeed > 50000 {
-		fmt.Printf("  Good performance (>50k addr/s)\n")
-	} else if result.AverageSpeed > 10000 {
-		fmt.Printf("  Moderate performance (>10k addr/s)\n")
-	} else {
-		fmt.Printf("  Performance could be improved (<10k addr/s)\n")
-	}
-
-	return nil
-}
-
 // GetRootCommand returns the root command for fang integration
 func (app *Application) GetRootCommand() *cobra.Command {
 	return app.rootCmd
@@ -1947,38 +1938,10 @@ func (app *Application) generateAndSaveKeystore(w *wallet.Wallet) error {
 	return app.generateAndSaveKeystoreWithVerbose(w, app.config.CLI.VerboseOutput)
 }
 
-// generateAndSaveKeystoreWithVerbose generates and saves a keystore file with verbose control
-// For Bitcoin: only saves mnemonic (no KeyStore V3)
-// For Ethereum and Solana: generates KeyStore V3 or network-specific format
+// generateAndSaveKeystoreWithVerbose generates and saves a keystore file with verbose control.
+// Every network persists an encrypted KeyStore V3; a mnemonic is written
+// alongside it only when the wallet actually derives from one.
 func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, verbose bool) error {
-	// Bitcoin only saves mnemonic, no KeyStore V3
-	if strings.ToLower(w.Network) == "bitcoin" {
-		if w.Mnemonic == "" {
-			return fmt.Errorf("bitcoin wallet requires mnemonic for backup")
-		}
-
-		// Create keystore service just for saving mnemonic
-		keystoreConfig := crypto.KeyStoreConfig{
-			Enabled:         app.config.KeyStore.Enabled,
-			OutputDirectory: app.config.KeyStore.OutputDir,
-		}
-		keystoreService := crypto.NewKeyStoreService(keystoreConfig)
-		keystoreService.SetVerboseMode(verbose)
-
-		// Save only the mnemonic for Bitcoin
-		if err := keystoreService.SaveMnemonicFile(w.Address, w.Mnemonic, w.Network); err != nil {
-			if ksErr, ok := err.(*crypto.KeyStoreError); ok {
-				if ksErr.UserMessage != "" {
-					return fmt.Errorf("mnemonic save failed: %s", ksErr.UserMessage)
-				}
-				return fmt.Errorf("mnemonic save failed for address %s: %v", w.Address, err)
-			}
-			return fmt.Errorf("failed to save mnemonic file for address %s: %w", w.Address, err)
-		}
-		return nil
-	}
-
-	// For Ethereum and Solana: generate KeyStore V3 or network-specific format
 	// Create Universal KDF service for enhanced compatibility
 	kdfService := kdf.NewUniversalKDFService()
 
@@ -2003,9 +1966,14 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 		OutputDirectory: app.config.KeyStore.OutputDir,
 		KDF:             app.config.KeyStore.KDFAlgorithm,
 		KDFParams:       kdfParams,
-		Cipher:          "aes-128-ctr",
-		MaxRetries:      3,
-		RetryDelay:      100, // 100ms
+		FilePerm:        os.FileMode(app.config.KeyStore.FileMode),
+
+		WritePasswordFile:     app.config.KeyStore.WritePasswordFile,
+		WritePlaintextKeyFile: app.config.KeyStore.WritePlaintextKey,
+
+		Cipher:     "aes-128-ctr",
+		MaxRetries: 3,
+		RetryDelay: 100, // 100ms
 	}
 
 	// Create keystore service with controlled verbose logging
@@ -2037,6 +2005,11 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 			app.displayCompatibilityReport(report, verbose)
 		}
 	}
+
+	// The password is deliberately not written next to the keystore unless
+	// --write-password-file is set, so it is recorded here and surfaced once
+	// the run finishes. Without it the keystore could never be opened.
+	app.secrets.Record(w.Address, password)
 
 	// Save the generated keystore
 	if err := keystoreService.SaveKeyStoreFilesToDisk(w.Address, keystore, password, w.Network, w.PrivateKey); err != nil {

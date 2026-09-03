@@ -22,6 +22,7 @@ type StatsModel struct {
 	height       int
 	quitting     bool
 	ready        bool
+	engineInfo   EngineInfo
 }
 
 // StatsData represents formatted statistical data for display
@@ -51,7 +52,7 @@ func NewStatsModel(stats *wallet.GenerationStats) StatsModel {
 
 	t := table.New(
 		table.WithColumns(columns),
-		table.WithFocused(false),
+		table.WithFocused(true),
 		table.WithHeight(15),
 	)
 
@@ -84,7 +85,7 @@ func NewStatsModel(stats *wallet.GenerationStats) StatsModel {
 
 	t.SetStyles(tableStyle)
 
-	return StatsModel{
+	model := StatsModel{
 		table:        t,
 		stats:        stats,
 		styleManager: styleManager,
@@ -93,11 +94,18 @@ func NewStatsModel(stats *wallet.GenerationStats) StatsModel {
 		quitting:     false,
 		ready:        false,
 	}
+	model.updateTableData()
+	return model
+}
+
+func (m StatsModel) WithEngineInfo(info EngineInfo) StatsModel {
+	m.engineInfo = info
+	return m
 }
 
 // Init initializes the statistics model
 func (m StatsModel) Init() tea.Cmd {
-	return m.updateTableData()
+	return nil
 }
 
 // Update handles messages and updates the model
@@ -132,13 +140,15 @@ func (m StatsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle external statistics updates
 		if msg.Stats != nil {
 			m.stats = msg.Stats
-			return m, m.updateTableData()
+			m.updateTableData()
+			return m, nil
 		}
 
 	default:
 		if !m.ready {
 			m.ready = true
-			return m, m.updateTableData()
+			m.updateTableData()
+			return m, nil
 		}
 	}
 
@@ -161,11 +171,13 @@ func (m StatsModel) View() string {
 	content.WriteString("\n")
 	content.WriteString(pad)
 	content.WriteString(m.styleManager.FormatTitle("Bloco Address Difficulty Analysis"))
-	content.WriteString("\n\n")
+	content.WriteString("\n")
 
 	// Pattern overview section
-	content.WriteString(m.renderPatternOverview())
-	content.WriteString("\n")
+	if block := m.renderEngineInfoBlock(pad); block != "" {
+		content.WriteString(block)
+		content.WriteString("\n")
+	}
 
 	// Main statistics table
 	content.WriteString(pad)
@@ -191,6 +203,23 @@ func (m StatsModel) View() string {
 	helpText := "Use ↑/↓ or j/k to navigate • Press 'q', 'Ctrl+C', or 'Esc' to quit"
 	content.WriteString(helpStyle(helpText))
 
+	return content.String()
+}
+
+func (m StatsModel) renderEngineInfoBlock(pad string) string {
+	if m.engineInfo.IsZero() {
+		return ""
+	}
+
+	var content strings.Builder
+	content.WriteString(pad)
+	content.WriteString(m.styleManager.FormatSubtitle("Engine"))
+	content.WriteString("\n")
+	for _, row := range engineInfoRows(m.engineInfo) {
+		content.WriteString(pad)
+		content.WriteString(m.styleManager.FormatKeyValue(row.label, row.value))
+		content.WriteString("\n")
+	}
 	return content.String()
 }
 
@@ -424,16 +453,14 @@ func (m StatsModel) renderRecommendations() string {
 }
 
 // updateTableData updates the table with current statistics
-func (m StatsModel) updateTableData() tea.Cmd {
+func (m *StatsModel) updateTableData() {
 	if m.stats == nil {
-		return nil
+		return
 	}
 
 	// Generate table rows with statistical data
 	rows := m.generateStatisticsRows()
 	m.table.SetRows(rows)
-
-	return nil
 }
 
 // generateStatisticsRows generates the main statistics table rows

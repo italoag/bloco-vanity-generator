@@ -31,7 +31,7 @@ Este arquivo reúne perguntas de validação humana para pontos da CLI em que o 
 
 | ID | Pergunta | Contexto | Impacto | Confiança |
 |---|---|---|---|---:|
-| Q-CLI-011 | O nome de produto exibido deve ser `Bloco-ETH`, `bloco-vgen`, `Bloco Vanity Generator` ou `bloco-wallet-generator`? | O código e artefatos anteriores registram nomes inconsistentes. | Afeta ajuda CLI, releases, Docker, documentação e onboarding. | 🟢 |
+| Q-CLI-011 | O nome de produto exibido deve ser `Bloco Vanity Generator`, `bloco-vgen`, `Bloco Vanity Generator` ou `bloco-wallet-generator`? | O código e artefatos anteriores registram nomes inconsistentes. | Afeta ajuda CLI, releases, Docker, documentação e onboarding. | 🟢 |
 | Q-CLI-012 | A TUI deve ser padrão quando terminal suporta ou depender sempre de `--progress`? | A flag `--tui` tem default `true`, mas geração só usa TUI quando `--progress` está ativo. | Afeta expectativa de UX para usuários que não passam `--progress`. | 🟢 |
 | Q-CLI-013 | Warnings de keystore devem ir para stdout ou stderr? | O código usa `fmt.Printf` em alguns warnings e `fmt.Fprintf(os.Stderr, ...)` em warnings de shutdown. | Afeta automações que parseiam stdout. | 🟡 |
 | Q-CLI-014 | O subcomando `stats` deve respeitar `--network`? | `showStats()` usa `getGenerationCriteria()`, mas o comando `stats` declara apenas prefix/suffix/checksum como flags próprias. | Pode afetar análise para Bitcoin/Solana se a rede for relevante. | 🟡 |
@@ -68,7 +68,7 @@ Este arquivo reúne perguntas de validação humana para pontos da CLI em que o 
 
 | ID | Resposta | Abordagem recomendada | Status |
 |---|---|---|---|
-| Q-CLI-011 | Nome canônico: produto/repo/docs como `bloco-vanity-generator`; binário compatível como `bloco-vgen`. | Help, README, CI, Docker e releases devem convergir para `bloco-vgen` como executável. Nome textual de produto pode usar `Bloco Vanity Generator`; evitar `Bloco-ETH` como nome principal porque o produto é multirede. | Respondida |
+| Q-CLI-011 | Nome canônico: produto/repo/docs como `bloco-vanity-generator`; binário compatível como `bloco-vgen`. | Help, README, CI, Docker e releases devem convergir para `bloco-vgen` como executável. Nome textual de produto pode usar `Bloco Vanity Generator`; evitar `Bloco Vanity Generator` como nome principal porque o produto é multirede. | Respondida |
 | Q-CLI-012 | A TUI não deve abrir apenas porque o terminal suporta; deve depender de intenção de progresso/interatividade. | Manter `--tui` como preferência/capacidade e usar TUI quando `--progress` estiver ativo e o ambiente suportar. Sem `--progress`, manter saída textual simples e previsível. | Respondida |
 | Q-CLI-013 | Warnings de keystore devem ir para stderr. | stdout deve permanecer reservado para resultado consumível pelo usuário/automação. Warnings, diagnósticos e falhas de persistência devem ir para stderr ou log operacional seguro. | Respondida |
 | Q-CLI-014 | `stats` deve respeitar `--network` no alvo multirede. | Adicionar flags/reuso de flags globais para rede e calcular dificuldade conforme alfabeto/formato da rede. Enquanto não implementado, documentar `stats` como estimativa Ethereum/hex. | Respondida |

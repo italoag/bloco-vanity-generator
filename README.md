@@ -110,15 +110,15 @@ Run `./bloco-vgen <command> --help` for the exact flag list exposed by Cobra/Fan
 | `--checksum` | `-c` | `false` | Enables Ethereum EIP-55 checksum mode. |
 | `--case-sensitive` | | `false` | Requires exact case matching. Currently valid only with `--checksum` on Ethereum. |
 | `--count` | `-n` | `1` | Number of wallets to generate. |
-| `--network` | | `ethereum` | Selects `ethereum`, `bitcoin`, or `solana`. |
-| `--with-mnemonic` | | `false` | Uses BIP-39 mnemonic derivation for Ethereum generation. Non-Ethereum mnemonic generation is disabled in the worker path. |
+| `--network` | | `ethereum` | Target network: `ethereum`, `bitcoin` or `solana`. Any other value is rejected before generation starts. |
+| `--with-mnemonic` | | `false` | Derives the key from a BIP-39 mnemonic so the saved phrase restores the wallet. Supported for Ethereum and Bitcoin; ignored for Solana (Ed25519). |
 | `--threads` | `-t` | `0` | `0` means auto-detect CPU count; positive values set worker count. Config validation rejects more than 128 threads. |
 | `--progress` | | `false` | Enables TUI progress when available. Text-mode live progress is limited. |
 | `--tui` | | `true` | Enables terminal UI when supported. Use `--tui=false` for plain text output. |
 | `--verbose` | `-v` | `false` | Enables verbose output in supported paths. |
 | `--quiet` | `-q` | `false` | Suppresses some non-essential output. It is not a secret-redaction guarantee for every output path. |
-| `--output` | | `""` | Flag is registered, but wallet output is currently printed to stdout. |
-| `--format` | | `text` | Flag is registered, but wallet output formatting is currently not switched to JSON/CSV. |
+| `--output` | | `""` | Writes the results to this file with mode `0600` instead of printing the private key to the terminal. |
+| `--format` | | `text` | Output format: `text`, `json` or `csv`. Applies to `--output`, and to stdout for `json`/`csv`. |
 
 ## Vanity matching rules
 
@@ -141,23 +141,37 @@ Network-specific matching behavior:
 
 Backup files are enabled by default and written to `./keystores`. Use `--no-keystore` to skip them.
 
-All backup files are written with `0600` permissions through atomic temporary-file writes where implemented.
+The output directory is created with `0700` and every file inside it with `0600`, through atomic
+temporary-file writes.
 
-| Network | Files currently written |
+| Network | Files written |
 |---|---|
-| Ethereum | `0x<address>.json` KeyStore V3 file and `0x<address>.pwd` password file. If generated with mnemonic, also `0x<address>.mnemonic`. EIP-55 case is preserved in filenames. |
-| Bitcoin | `<address>.mnemonic` only. The generated mnemonic is for backup metadata and is not used to derive the random private key. |
-| Solana | `<address>.json` metadata file and `<address>.key` containing the raw private key hex. Treat this as sensitive material. |
+| Ethereum | `UTC--<timestamp>--0x<address>.json`, an encrypted KeyStore V3 file. With `--with-mnemonic`, also `0x<address>.mnemonic`, which derives the key at `m/44'/60'/0'/0/0`. EIP-55 case is preserved in filenames. |
+| Bitcoin | `<address>.json`, an encrypted KeyStore V3 file. With `--with-mnemonic`, also `<address>.mnemonic`, which derives the key at `m/44'/0'/0'/0/0`. |
+| Solana | `<address>.json`, an encrypted KeyStore V3 file holding the 64-byte Ed25519 key. |
 
-### Ethereum KeyStore settings
+**The keystore password is not written to disk by default.** It is printed once when the run
+finishes, or included in the `--output` file when one is given. Storing it next to the keystore it
+unlocks would reduce the KDF to nothing for anyone who copies the directory, so it is opt-in:
+
+| Flag | Default | Behavior |
+|---|---:|---|
+| `--write-password-file` | `false` | Also writes `<address>.pwd` next to the keystore. Insecure: the password and the file it opens end up in the same directory. |
+| `--write-plaintext-key` | `false` | Also writes `<address>.key` with the raw private key hex (Solana). Insecure: unencrypted key material on disk. |
+
+### KeyStore settings
 
 | Flag | Default | Valid values / behavior |
 |---|---:|---|
-| `--keystore-dir` | `./keystores` | Output directory. |
+| `--keystore-dir` | `./keystores` | Output directory, created with `0700`. |
 | `--keystore-kdf` | `scrypt` | `scrypt`, `pbkdf2`, `pbkdf2-sha256`, `pbkdf2-sha512`. |
-| `--kdf-params` | auto | JSON parameters validated according to selected KDF. |
-| `--security-level` | `medium` | `low`, `medium`, `high`, `very-high`. Used when KDF params are not supplied. |
+| `--kdf-params` | auto | JSON parameters. Applied to the generated keystore and held to the security floor below. |
+| `--security-level` | `medium` | `low`, `medium`, `high`, `very-high`. Used when `--kdf-params` is not supplied. |
 | `--kdf-analysis` | `false` | Prints KDF compatibility/security analysis after keystore generation. |
+
+Minimum accepted KDF strength, enforced both when the flag is parsed and again before the key is
+encrypted: scrypt needs `n >= 16384` and `128 * n * r >= 16 MiB`; PBKDF2 needs `c >= 100000`. These
+match the `low` security level, so every documented `--security-level` value is accepted.
 
 Example custom KDF parameters:
 
@@ -242,17 +256,16 @@ These are current code behavior, not intended long-term product claims:
 
 - `benchmark` does not currently expose a `--pattern` flag, even though older documentation mentioned one.
 - The text benchmark path currently does not submit real generation work to workers; it can report `0` attempts and `0 addr/s`.
-- `--output` and `--format` are registered flags, but wallet generation currently prints text to stdout and does not write result files or switch to JSON/CSV output.
 - Text-mode progress is limited; the previous text progress manager is disabled in generation fallback paths to avoid deadlocks.
-- Prefix/suffix validation is hexadecimal for all networks, which limits Bitcoin and Solana vanity searches despite their Base58 address formats.
-- Bitcoin mnemonics are generated as backup metadata and are not used to derive the generated private key.
-- Solana backup currently writes a raw private key `.key` file when keystore output is enabled. Protect or disable this with `--no-keystore` if that is not acceptable.
+- Prefix/suffix validation is hexadecimal for all networks, which limits Bitcoin and Solana vanity searches despite their Base58 address formats. A Bitcoin P2PKH address always starts with `1`, so a prefix that cannot occur will search forever.
+- `--with-mnemonic` derives the key from the phrase through BIP-32, which costs roughly 14 ms per candidate. It is practical for short patterns only.
 - There is no database. Persistence is local filesystem only.
 
 ## Security notes
 
-- Treat stdout as sensitive because successful wallet output includes private keys and sometimes mnemonics.
-- Treat `*.pwd`, `*.mnemonic`, and `*.key` files as sensitive secrets.
+- Treat stdout as sensitive because successful wallet output includes private keys, keystore passwords and sometimes mnemonics. Use `--output <file>` to write them to a `0600` file instead: the private key is then not printed to the terminal.
+- Treat `*.mnemonic` files, and the opt-in `*.pwd` and `*.key` files, as sensitive secrets.
+- Every wallet returned in a single run has an independent private key. The generator scans candidates in chained batches for speed, and the chain that produced a delivered key is discarded so that no two delivered keys are a small offset apart.
 - Ethereum keystore filenames preserve the address case currently held by the generated wallet, including EIP-55 mixed case when checksum mode is used.
 - The project currently targets Go `1.25.9+` and `github.com/ethereum/go-ethereum v1.17.0` to avoid known `govulncheck` findings reported against older versions.
 
