@@ -285,14 +285,36 @@ func (tm *TUIManager) CreateProgressModel(stats *wallet.GenerationStats, statsMa
 	return NewProgressModel(stats, statsManager)
 }
 
+// CreateProgressModelWithEngine creates a progress TUI model preloaded with
+// engine diagnostics so the running view shows engine, device and batch info
+// equivalent to the text-mode block.
+func (tm *TUIManager) CreateProgressModelWithEngine(stats *wallet.GenerationStats, statsManager StatsManager, engineInfo EngineInfo) tea.Model {
+	return NewProgressModel(stats, statsManager).WithEngineInfo(engineInfo)
+}
+
 // CreateBenchmarkModel creates a benchmark TUI model
 func (tm *TUIManager) CreateBenchmarkModel() tea.Model {
 	return NewBenchmarkModel()
 }
 
+// CreateBenchmarkModelWithEngine creates a benchmark TUI model preloaded with
+// engine diagnostics so the progress and results views include the same engine,
+// device and batch information rendered by runBenchmarkText.
+func (tm *TUIManager) CreateBenchmarkModelWithEngine(engineInfo EngineInfo) tea.Model {
+	return NewBenchmarkModel().WithEngineInfo(engineInfo)
+}
+
+func (tm *TUIManager) CreateBenchmarkComparisonModel(summary BenchmarkComparisonSummary, total int) tea.Model {
+	return NewBenchmarkComparisonModel(summary, total)
+}
+
 // CreateStatsModel creates a statistics TUI model
 func (tm *TUIManager) CreateStatsModel(stats *wallet.GenerationStats) tea.Model {
 	return NewStatsModel(stats)
+}
+
+func (tm *TUIManager) CreateStatsModelWithEngine(stats *wallet.GenerationStats, engineInfo EngineInfo) tea.Model {
+	return NewStatsModel(stats).WithEngineInfo(engineInfo)
 }
 
 // GetCapabilities returns the current terminal capabilities

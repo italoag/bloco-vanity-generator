@@ -1,7 +1,7 @@
 # Code Analysis Report
 
 ## Overview
-This document provides a comprehensive analysis of the Bloco-ETH wallet generator project, identifying architectural issues, code smells, SOLID principle violations, and areas for improvement. The analysis covers all major components of the system.
+This document provides a comprehensive analysis of the Bloco Vanity Generator wallet generator project, identifying architectural issues, code smells, SOLID principle violations, and areas for improvement. The analysis covers all major components of the system.
 
 ## SOLID Principle Violations
 
@@ -242,4 +242,4 @@ This document provides a comprehensive analysis of the Bloco-ETH wallet generato
 
 ## Conclusion
 
-The Bloco-ETH project has significant architectural and design issues that affect maintainability, testability, and extensibility. While the core functionality works, the codebase violates multiple SOLID principles and contains numerous code smells that will make future development more difficult. Addressing these issues through systematic refactoring and architectural improvements will greatly enhance the project's quality and long-term viability.
+The Bloco Vanity Generator project has significant architectural and design issues that affect maintainability, testability, and extensibility. While the core functionality works, the codebase violates multiple SOLID principles and contains numerous code smells that will make future development more difficult. Addressing these issues through systematic refactoring and architectural improvements will greatly enhance the project's quality and long-term viability.

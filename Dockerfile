@@ -1,5 +1,5 @@
 # Build arguments
-ARG GO_VERSION=1.25.10
+ARG GO_VERSION=1.25.13
 ARG ALPINE_VERSION=3.20
 
 # Build stage
@@ -35,7 +35,7 @@ RUN CGO_ENABLED=0 \
     go build \
     -a \
     -installsuffix cgo \
-    -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${GIT_REV} -X main.date=${BUILD_DATE}" \
+    -ldflags="-w -s -X main.Version=${VERSION} -X main.GitCommit=${GIT_REV} -X main.BuildTime=${BUILD_DATE}" \
     -o bloco-vgen \
     ./cmd/bloco-vgen
 
@@ -91,7 +91,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Add labels
 LABEL org.opencontainers.image.title="bloco-vgen" \
-    org.opencontainers.image.description="An Ethereum like Wallet Generator" \
+    org.opencontainers.image.description="An Ethereum like Vanity Generator" \
     org.opencontainers.image.url="https://github.com/italoag/bloco-wallet-generator" \
     org.opencontainers.image.source="https://github.com/italoag/bloco-wallet-generator" \
     org.opencontainers.image.version="${VERSION}" \

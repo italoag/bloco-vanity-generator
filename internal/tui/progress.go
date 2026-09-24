@@ -34,6 +34,33 @@ type ProgressModel struct {
 	completedWallets int  // Number of wallets completed
 	totalWallets     int  // Total wallets requested
 	isComplete       bool // Indicates if generation is complete
+	engineInfo       EngineInfo
+}
+
+// EngineInfo describes the active generation/benchmark engine for TUI rendering.
+// It mirrors the diagnostics printed in text mode so the TUI displays the same
+// information without requiring the user to read raw stdout output.
+type EngineInfo struct {
+	Engine          string
+	RequestedEngine string
+	FallbackReason  string
+	DeviceName      string
+	BatchSize       int
+	MetalValidation string
+	ThreadCount     int
+	Network         string
+}
+
+// IsZero reports whether EngineInfo carries any diagnostic information.
+func (info EngineInfo) IsZero() bool {
+	return info.Engine == "" &&
+		info.RequestedEngine == "" &&
+		info.FallbackReason == "" &&
+		info.DeviceName == "" &&
+		info.BatchSize == 0 &&
+		info.MetalValidation == "" &&
+		info.ThreadCount == 0 &&
+		info.Network == ""
 }
 
 // ProgressMsg represents a progress update message
@@ -125,6 +152,14 @@ func NewProgressModel(stats *wallet.GenerationStats, statsManager StatsManager) 
 		totalWallets:     1, // Default to 1 for single wallet generation
 		isComplete:       false,
 	}
+}
+
+// WithEngineInfo returns a copy of the model with engine diagnostics attached.
+// The diagnostics are rendered in the progress view to match the text-mode
+// engine block printed by displayGenerationEngineDiagnostics.
+func (m ProgressModel) WithEngineInfo(info EngineInfo) ProgressModel {
+	m.engineInfo = info
+	return m
 }
 
 // Init initializes the progress model
@@ -268,12 +303,16 @@ func (m ProgressModel) View() string {
 	var content strings.Builder
 
 	// Title section
-	content.WriteString("\n")
 	content.WriteString(renderBlocoLogo(pad))
 	content.WriteString("\n")
 	content.WriteString(pad)
-	content.WriteString(m.styleManager.FormatTitle("Wallet Generator"))
-	content.WriteString("\n")
+	content.WriteString(m.styleManager.FormatTitle("Vanity Generator"))
+
+	// Engine diagnostics (same fields as the text-mode block)
+	if engineBlock := m.renderEngineInfo(); engineBlock != "" {
+		content.WriteString("\n")
+		content.WriteString(engineBlock)
+	}
 
 	// ALWAYS show progress information first (pattern, difficulty, progress bar, stats)
 
@@ -375,6 +414,70 @@ func (m ProgressModel) tickCmd() tea.Cmd {
 	return tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+// renderEngineInfo renders the engine diagnostics block. It mirrors the fields
+// displayed by displayGenerationEngineDiagnostics in the CLI text path so the
+// TUI provides equivalent visibility into engine, device and batch sizing.
+func (m ProgressModel) renderEngineInfo() string {
+	if m.engineInfo.IsZero() {
+		return ""
+	}
+
+	pad := strings.Repeat(" ", padding)
+	var content strings.Builder
+
+	content.WriteString(pad)
+	content.WriteString(m.styleManager.FormatSubtitle("Engine"))
+	content.WriteString("\n")
+
+	rows := engineInfoRows(m.engineInfo)
+	for _, row := range rows {
+		content.WriteString(pad)
+		content.WriteString(m.styleManager.FormatKeyValue(row.label, row.value))
+		content.WriteString("\n")
+	}
+
+	return content.String()
+}
+
+// engineInfoRows returns the ordered key/value pairs to render for an EngineInfo.
+// Empty values are skipped so the TUI matches the text-mode behavior of only
+// showing fields that are actually populated for the active engine.
+func engineInfoRows(info EngineInfo) []struct {
+	label string
+	value string
+} {
+	rows := make([]struct {
+		label string
+		value string
+	}, 0, 7)
+	add := func(label, value string) {
+		if value == "" {
+			return
+		}
+		rows = append(rows, struct {
+			label string
+			value string
+		}{label, value})
+	}
+
+	add("Engine", info.Engine)
+	if info.RequestedEngine != "" && info.RequestedEngine != info.Engine {
+		add("Requested", info.RequestedEngine)
+	}
+	add("Fallback", info.FallbackReason)
+	add("Device", info.DeviceName)
+	if info.BatchSize > 0 {
+		add("Batch Size", fmt.Sprintf("%d", info.BatchSize))
+	}
+	add("Validation", info.MetalValidation)
+	if info.ThreadCount > 0 {
+		add("Threads", fmt.Sprintf("%d", info.ThreadCount))
+	}
+	add("Network", info.Network)
+
+	return rows
 }
 
 // renderStatsTable renders statistics in a table-like format using Bubbletea

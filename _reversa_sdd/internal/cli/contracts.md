@@ -116,7 +116,7 @@ bloco-vgen version
 
 | Saída | Evidência | Confiança |
 |---|---|---:|
-| `Bloco-ETH <version>` | `internal/cli/commands.go:954-963` | 🟢 |
+| `Bloco Vanity Generator <version>` | `internal/cli/commands.go:954-963` | 🟢 |
 | `Git Commit: <gitCommit>` | `internal/cli/commands.go:960-962` | 🟢 |
 | `Build Time: <buildTime>` | `internal/cli/commands.go:960-962` | 🟢 |
 
