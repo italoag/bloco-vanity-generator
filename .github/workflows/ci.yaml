@@ -69,6 +69,9 @@ jobs:
     - name: Run unit tests (fast)
       run: go test -short ./... -v -race -timeout=5m -coverprofile=coverage.out
 
+    - name: Check keystore performance without instrumentation
+      run: go test ./internal/crypto -run '^TestKeyStoreServicePerformanceBenchmark$' -count=1 -v -timeout=5m
+
     - name: Generate coverage report
       if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
       shell: bash
