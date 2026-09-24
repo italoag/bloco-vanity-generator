@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
-	"golang.org/x/crypto/sha3"
 
 	"bloco-vgen/internal/crypto"
 	"bloco-vgen/internal/vanity"
@@ -225,56 +223,6 @@ func runEthereumAttempt(chain *crypto.PrivateKeyChain, criteria wallet.Generatio
 	return matched, stages, nil
 }
 
-func runEthereumAddressAttempt() ([20]byte, stageTotals, error) {
-	var empty [20]byte
-	publicKey, stages, err := runEthereumPublicKeyAttempt()
-	if err != nil {
-		return empty, stages, err
-	}
-
-	stageStart := time.Now()
-	addressBytes := EthereumAddressBytesFromPublicKey(publicKey[:], sha3.NewLegacyKeccak256())
-	stages.Hash = time.Since(stageStart)
-
-	return addressBytes, stages, nil
-}
-
-func runEthereumPublicKeyAttempt() ([64]byte, stageTotals, error) {
-	var stages stageTotals
-	var publicKey [64]byte
-
-	privateKey, entropyDuration, err := generateEthereumPrivateKeyAttempt()
-	if err != nil {
-		zeroBytes(privateKey[:])
-		return publicKey, stages, err
-	}
-	defer zeroBytes(privateKey[:])
-	stages.Entropy = entropyDuration
-
-	stageStart := time.Now()
-	x, y := ethcrypto.S256().ScalarBaseMult(privateKey[:])
-	stages.Scalar = time.Since(stageStart)
-
-	x.FillBytes(publicKey[:32])
-	y.FillBytes(publicKey[32:])
-
-	return publicKey, stages, nil
-}
-
-func generateEthereumPrivateKeyAttempt() ([32]byte, time.Duration, error) {
-	var privateKey [32]byte
-	start := time.Now()
-	for {
-		if _, err := crand.Read(privateKey[:]); err != nil {
-			zeroBytes(privateKey[:])
-			return privateKey, time.Since(start), err
-		}
-		if validSecp256k1PrivateKey(privateKey[:]) {
-			return privateKey, time.Since(start), nil
-		}
-	}
-}
-
 func validSecp256k1PrivateKey(privateKey []byte) bool {
 	if len(privateKey) != 32 {
 		return false
@@ -392,11 +340,4 @@ func speedRange(samples []float64) (float64, float64) {
 		}
 	}
 	return minSpeed, maxSpeed
-}
-
-func throughputForDuration(totalAttempts int64, duration time.Duration) float64 {
-	if totalAttempts <= 0 || duration <= 0 {
-		return 0
-	}
-	return float64(totalAttempts) / duration.Seconds()
 }

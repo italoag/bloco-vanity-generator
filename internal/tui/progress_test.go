@@ -141,3 +141,48 @@ func TestBenchmarkModelRendersEngineBlock(t *testing.T) {
 		}
 	}
 }
+
+func TestBenchmarkModelRendersStateViews(t *testing.T) {
+	base := NewBenchmarkModel().WithEngineInfo(EngineInfo{Engine: "cpu", ThreadCount: 2})
+	base.results = &wallet.BenchmarkResult{TotalAttempts: 100, ThreadCount: 2}
+	base.table.SetRows(base.generateResultsRows())
+
+	cases := []struct {
+		state  BenchmarkState
+		header string
+	}{
+		{BenchmarkStateProgress, "Benchmark Running"},
+		{BenchmarkStateTransitioning, "Loading Results"},
+		{BenchmarkStateResults, "Benchmark Results"},
+	}
+	for _, tc := range cases {
+		model := base
+		model.state = tc.state
+		view := model.View()
+		if !strings.Contains(view, tc.header) {
+			t.Fatalf("state %d view missing header %q, view=%s", tc.state, tc.header, view)
+		}
+		if tc.state == BenchmarkStateResults {
+			for _, want := range []string{"Total Attempts", "Engine"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("results view missing %q, view=%s", want, view)
+				}
+			}
+		}
+
+		model.quitting = true
+		if got := model.View(); got != "" {
+			t.Fatalf("state %d quitting view should be empty, got %q", tc.state, got)
+		}
+	}
+}
+
+func TestStatsModelRendersPatternOverview(t *testing.T) {
+	model := NewStatsModel(&wallet.GenerationStats{Pattern: "ab", IsChecksum: true, Difficulty: 256, Probability50: 177})
+	view := model.View()
+	for _, want := range []string{"Pattern Length", "Enabled (increases difficulty)", "Detailed Statistics"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("stats view missing %q, view=%s", want, view)
+		}
+	}
+}

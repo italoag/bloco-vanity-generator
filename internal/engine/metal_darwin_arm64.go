@@ -637,6 +637,7 @@ import "C"
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -1298,4 +1299,25 @@ func cBytePointer(values []byte) *C.uint8_t {
 		return nil
 	}
 	return (*C.uint8_t)(unsafe.Pointer(&values[0]))
+}
+
+func generateEthereumPrivateKeyAttempt() ([32]byte, time.Duration, error) {
+	var privateKey [32]byte
+	start := time.Now()
+	for {
+		if _, err := crand.Read(privateKey[:]); err != nil {
+			zeroBytes(privateKey[:])
+			return privateKey, time.Since(start), err
+		}
+		if validSecp256k1PrivateKey(privateKey[:]) {
+			return privateKey, time.Since(start), nil
+		}
+	}
+}
+
+func throughputForDuration(totalAttempts int64, duration time.Duration) float64 {
+	if totalAttempts <= 0 || duration <= 0 {
+		return 0
+	}
+	return float64(totalAttempts) / duration.Seconds()
 }

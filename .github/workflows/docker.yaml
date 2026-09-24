@@ -94,10 +94,31 @@ jobs:
       with:
         sarif_file: 'trivy-results.sarif'
 
+    - name: Load smoke-test image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64
+        load: true
+        push: false
+        tags: bloco-vgen:smoke
+        build-args: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          GIT_REV=${{ steps.version.outputs.GIT_REV }}
+          BUILD_DATE=${{ steps.version.outputs.BUILD_DATE }}
+        cache-from: type=gha
+
     - name: Test Docker image
+      env:
+        EXPECTED_VERSION: ${{ steps.version.outputs.VERSION }}
+        EXPECTED_COMMIT: ${{ steps.version.outputs.GIT_REV }}
       run: |
         # Test that the image runs correctly
-        docker run --rm ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen:${{ steps.meta.outputs.version }} --help || true
+        docker run --rm bloco-vgen:smoke --help
+        output=$(docker run --rm bloco-vgen:smoke version)
+        printf '%s\n' "$output"
+        [[ "$output" == *"Bloco Vanity Generator $EXPECTED_VERSION"* ]]
+        [[ "$output" == *"Git Commit: $EXPECTED_COMMIT"* ]]
 
   multi-arch-test:
     name: Multi-Architecture Test
@@ -120,13 +141,22 @@ jobs:
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=ref,event=tag
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=sha
 
     - name: Test image on ${{ matrix.platform }}
       run: |
         # Test the specific platform image
         docker run --rm --platform ${{ matrix.platform }} \
           ${{ env.REGISTRY }}/${{ github.repository_owner }}/bloco-vgen:${{ steps.meta.outputs.version }} \
-          --help || true
+          --help
 
   cleanup:
     name: Cleanup Old Images

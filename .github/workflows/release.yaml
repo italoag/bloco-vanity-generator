@@ -11,7 +11,7 @@ on:
         required: true
         type: string
 env:
-  GO_VERSION: '1.25.10'
+  GO_VERSION: '1.25.13'
 
 permissions:
   contents: write
@@ -132,7 +132,7 @@ jobs:
         mkdir -p dist
         
         go build \
-          -ldflags="-w -s -X main.version=${{ needs.create-release.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -ldflags="-w -s -X main.Version=${{ needs.create-release.outputs.version }} -X main.GitCommit=${{ github.sha }} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           -o dist/${BINARY_NAME} \
           ./cmd/bloco-vgen
 
@@ -181,7 +181,7 @@ jobs:
         fi
 
         if CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
-          -ldflags="-w -s -X main.version=${{ needs.create-release.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -ldflags="-w -s -X main.Version=${{ needs.create-release.outputs.version }} -X main.GitCommit=${{ github.sha }} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           -o dist/bloco-vgen \
           ./cmd/bloco-vgen; then
           echo "METAL_BUILD_READY=true" >> "$GITHUB_ENV"

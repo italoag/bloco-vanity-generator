@@ -174,6 +174,8 @@ func (m StatsModel) View() string {
 	content.WriteString("\n")
 
 	// Pattern overview section
+	content.WriteString(m.renderPatternOverview())
+	content.WriteString("\n")
 	if block := m.renderEngineInfoBlock(pad); block != "" {
 		content.WriteString(block)
 		content.WriteString("\n")

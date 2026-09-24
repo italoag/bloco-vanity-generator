@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.25.10'
+  GO_VERSION: '1.25.13'
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go-version: ['1.25.10']
+        go-version: ['1.25.13']
       fail-fast: false
 
     steps:
@@ -67,15 +67,15 @@ jobs:
         fi
 
     - name: Run unit tests (fast)
-      run: go test -short ./... -v -race -timeout=90s -coverprofile=coverage.out
+      run: go test -short ./... -v -race -timeout=5m -coverprofile=coverage.out
 
     - name: Generate coverage report
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.10'
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
       shell: bash
       run: go tool cover -html=coverage.out -o coverage.html
 
     - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.10'
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
       uses: codecov/codecov-action@v4
       with:
         file: ./coverage.out
@@ -83,7 +83,7 @@ jobs:
         name: codecov-umbrella
 
     - name: Upload coverage artifacts
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.10'
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
@@ -133,7 +133,7 @@ jobs:
 
     - name: Run govulncheck
       run: |
-        go install golang.org/x/vuln/cmd/govulncheck@latest
+        go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
         govulncheck ./...
 
   build:
@@ -176,9 +176,21 @@ jobs:
         mkdir -p dist
         
         go build \
-          -ldflags="-w -s -X main.version=${{ steps.version.outputs.VERSION }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -ldflags="-w -s -X main.Version=${{ steps.version.outputs.VERSION }} -X main.GitCommit=${{ github.sha }} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           -o dist/${BINARY_NAME} \
           ./cmd/bloco-vgen
+
+    - name: Verify binary metadata
+      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      env:
+        EXPECTED_VERSION: ${{ steps.version.outputs.VERSION }}
+        EXPECTED_COMMIT: ${{ github.sha }}
+      run: |
+        output=$(dist/bloco-vgen version)
+        printf '%s\n' "$output"
+        [[ "$output" == *"Bloco Vanity Generator $EXPECTED_VERSION"* ]]
+        [[ "$output" == *"Git Commit: $EXPECTED_COMMIT"* ]]
+        [[ "$output" != *"Build Time: unknown"* ]]
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4

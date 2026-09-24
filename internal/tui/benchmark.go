@@ -95,12 +95,13 @@ func NewBenchmarkModel() BenchmarkModel {
 	t.SetStyles(s)
 
 	return BenchmarkModel{
-		state:        BenchmarkStateProgress,
-		table:        t,
-		progress:     p,
-		styleManager: NewStyleManager(),
-		running:      true,
-		lastUpdate:   time.Now(),
+		state:          BenchmarkStateProgress,
+		table:          t,
+		progress:       p,
+		styleManager:   NewStyleManager(),
+		running:        true,
+		lastUpdate:     time.Now(),
+		transitionTime: time.Now(),
 	}
 }
 
@@ -187,9 +188,9 @@ func (m BenchmarkModel) View() string {
 	case BenchmarkStateProgress:
 		return m.renderProgressView()
 	case BenchmarkStateTransitioning:
-		return m.renderProgressView()
+		return m.renderTransitionView()
 	case BenchmarkStateResults:
-		return m.renderProgressView()
+		return m.renderResultsView()
 	default:
 		return m.renderProgressView()
 	}
@@ -304,7 +305,7 @@ func (m BenchmarkModel) renderTransitionView() string {
 	b.WriteString(header + "\n\n")
 
 	// Simple loading animation
-	dots := strings.Repeat(".", int(time.Since(m.transitionTime)/100*time.Millisecond)%4)
+	dots := strings.Repeat(".", int(time.Since(m.transitionTime)/(100*time.Millisecond))%4)
 	loading := fmt.Sprintf("Preparing results%s", dots)
 	b.WriteString(loading + "\n\n")
 

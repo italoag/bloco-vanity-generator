@@ -20,8 +20,8 @@ const ChainBatchSize = 4096
 // chained keys are always kept in the range [2, N-2], so the chain never hits
 // the generator G, its negation -G, or the point at infinity.
 var (
-	chainTwo           = big.NewInt(2)
-	chainMaxSeed       = new(big.Int).Sub(secp256k1.S256().Params().N, big.NewInt(ChainBatchSize+1))
+	chainTwo            = big.NewInt(2)
+	chainMaxSeed        = new(big.Int).Sub(secp256k1.S256().Params().N, big.NewInt(ChainBatchSize+1))
 	chainGeneratorPoint = newJacobianPoint(secp256k1.S256().Params().Gx, secp256k1.S256().Params().Gy)
 )
 
@@ -365,9 +365,7 @@ func (c *PrivateKeyChain) filler() {
 			close(c.batches)
 			return
 		}
-		select {
-		case c.batches <- batch:
-		}
+		c.batches <- batch
 	}
 }
 

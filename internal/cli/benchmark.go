@@ -417,10 +417,6 @@ func decideBenchmarkCaseBest(resultCase benchmarkComparisonCase) string {
 	return best
 }
 
-func resolveCommandEngine(cmd *cobra.Command) (engine.Selection, error) {
-	return engine.Resolve(flagStringOrEnv(cmd, "engine", envBlocoEngine))
-}
-
 func renderBenchmarkResults(result *wallet.BenchmarkResult, detailed bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nBenchmark Results:\n")

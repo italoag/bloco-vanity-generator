@@ -343,8 +343,8 @@ func TestEthereumAddressFromCoordinatesMatchesGoEthereum(t *testing.T) {
 
 	expected := ethcrypto.PubkeyToAddress(privateKey.PublicKey).Hex()
 	actual := EthereumAddressFromCoordinates(
-		privateKey.PublicKey.X.FillBytes(make([]byte, 32)),
-		privateKey.PublicKey.Y.FillBytes(make([]byte, 32)),
+		privateKey.X.FillBytes(make([]byte, 32)),
+		privateKey.Y.FillBytes(make([]byte, 32)),
 		sha3.NewLegacyKeccak256(),
 	)
 
