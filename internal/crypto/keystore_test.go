@@ -1498,24 +1498,11 @@ func TestKeyStoreService_SaveKeyStoreFiles(t *testing.T) {
 				t.Fatalf("Unexpected error: %v", err)
 			}
 
-			// Verify files were created (keystore uses the geth naming
-			// convention UTC--<timestamp>--<address>.json)
-			cleanAddress := strings.ToLower(strings.TrimPrefix(tt.address, "0x"))
-			keystoreFile := ""
-			entries, err := os.ReadDir(tempDir)
-			if err != nil {
-				t.Fatalf("Failed to read output directory: %v", err)
-			}
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), fmt.Sprintf("--0x%s.json", cleanAddress)) {
-					keystoreFile = filepath.Join(tempDir, entry.Name())
-					break
-				}
-			}
-			if keystoreFile == "" {
-				t.Errorf("Keystore file (UTC--*--0x%s.json) was not created", cleanAddress)
-			}
-			passwordFile := filepath.Join(tempDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
+			// Verify files were created using the canonical
+			// <address>.json / <address>.pwd naming convention.
+			formattedAddress := formatAddressForFilename(tt.address, "ethereum")
+			keystoreFile := filepath.Join(tempDir, formattedAddress+".json")
+			passwordFile := filepath.Join(tempDir, fmt.Sprintf("%s.pwd", formattedAddress))
 
 			// Check keystore file exists and has correct content
 			if _, err := os.Stat(keystoreFile); os.IsNotExist(err) {
@@ -1600,17 +1587,10 @@ func TestKeyStoreService_SaveKeyStoreFilesPreservesEthereumFilenameCase(t *testi
 		names[entry.Name()] = true
 	}
 
-	// The keystore file uses the geth naming convention with a UTC timestamp
-	// prefix; verify the address suffix and case are preserved.
-	foundKeystore := false
-	for name := range names {
-		if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, "--"+address+".json") {
-			foundKeystore = true
-			break
-		}
-	}
-	if !foundKeystore {
-		t.Fatalf("expected keystore filename UTC--*--%s.json, got %v", address, names)
+	// The keystore file uses the canonical <address>.json naming; verify the
+	// address case is preserved.
+	if !names[address+".json"] {
+		t.Fatalf("expected keystore filename %s.json, got %v", address, names)
 	}
 
 	if !names[address+".pwd"] {
@@ -1745,7 +1725,7 @@ func TestKeyStoreService_EndToEndWorkflow(t *testing.T) {
 
 	for _, kdf := range kdfs {
 		t.Run(fmt.Sprintf("end_to_end_%s", kdf), func(t *testing.T) {
-			// Use a dedicated directory per KDF so the UTC--* file lookup
+			// Use a dedicated directory per KDF so the file lookup
 			// cannot pick up a file from a previous subtest.
 			subDir := filepath.Join(tempDir, kdf)
 			if err := os.MkdirAll(subDir, 0755); err != nil {
@@ -1774,22 +1754,12 @@ func TestKeyStoreService_EndToEndWorkflow(t *testing.T) {
 			}
 
 			// Verify we can load and decrypt the keystore
-			cleanAddress := strings.ToLower(strings.TrimPrefix(address, "0x"))
-			keystoreFile := ""
-			entries, err := os.ReadDir(subDir)
-			if err != nil {
-				t.Fatalf("Failed to read output directory: %v", err)
+			formattedAddress := formatAddressForFilename(address, "ethereum")
+			keystoreFile := filepath.Join(subDir, formattedAddress+".json")
+			if _, err := os.Stat(keystoreFile); err != nil {
+				t.Fatalf("Keystore file (%s.json) was not created: %v", formattedAddress, err)
 			}
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), fmt.Sprintf("--0x%s.json", cleanAddress)) {
-					keystoreFile = filepath.Join(subDir, entry.Name())
-					break
-				}
-			}
-			if keystoreFile == "" {
-				t.Fatalf("Keystore file (UTC--*--0x%s.json) was not created", cleanAddress)
-			}
-			passwordFile := filepath.Join(subDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
+			passwordFile := filepath.Join(subDir, fmt.Sprintf("%s.pwd", formattedAddress))
 
 			// Load keystore from file
 			keystoreData, err := os.ReadFile(keystoreFile)
@@ -2225,7 +2195,7 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "valid address with 0x prefix",
 			address:          "0x1234567890abcdef1234567890abcdef12345678",
-			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0x1234567890abcdef1234567890abcdef12345678.json",
+			wantKeystoreName: "0x1234567890abcdef1234567890abcdef12345678.json",
 			wantPasswordPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd"),
 			wantMnemonicPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.mnemonic"),
 			wantError:        false,
@@ -2233,7 +2203,7 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "valid address without 0x prefix",
 			address:          "1234567890abcdef1234567890abcdef12345678",
-			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0x1234567890abcdef1234567890abcdef12345678.json",
+			wantKeystoreName: "0x1234567890abcdef1234567890abcdef12345678.json",
 			wantPasswordPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd"),
 			wantMnemonicPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.mnemonic"),
 			wantError:        false,
@@ -2241,7 +2211,7 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "mixed case ethereum address",
 			address:          "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e",
-			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
+			wantKeystoreName: "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
 			wantPasswordPath: filepath.Join(tmpDir, "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.pwd"),
 			wantMnemonicPath: filepath.Join(tmpDir, "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.mnemonic"),
 			wantError:        false,
@@ -2257,8 +2227,8 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a keystore file matching the new naming convention so the
-			// directory scan can find it.
+			// Create a keystore file matching the canonical naming convention
+			// so the lookup can find it.
 			if !tt.wantError {
 				keystoreName := tt.wantKeystoreName
 				if err := os.WriteFile(filepath.Join(tmpDir, keystoreName), []byte(`{}`), 0600); err != nil {
@@ -2488,20 +2458,10 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 		t.Errorf("Expected no error but got: %v", err)
 	}
 
-	// Verify files exist with correct permissions (UTC-- naming convention)
-	var keystorePath string
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to read output directory: %v", err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), "--0x"+address+".json") {
-			keystorePath = filepath.Join(tmpDir, entry.Name())
-			break
-		}
-	}
-	if keystorePath == "" {
-		t.Fatalf("Keystore file (UTC--*--0x%s.json) was not created", address)
+	// Verify files exist with correct permissions (canonical <address>.* naming)
+	keystorePath := filepath.Join(tmpDir, "0x"+address+".json")
+	if _, err := os.Stat(keystorePath); err != nil {
+		t.Fatalf("Keystore file (0x%s.json) was not created: %v", address, err)
 	}
 	passwordPath := filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd")
 
@@ -2517,10 +2477,29 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 		t.Errorf("Password file should have 0600 permissions, got %o", info.Mode().Perm())
 	}
 
-	// Test overwriting existing files
-	err = service.SaveKeyStoreFilesToDisk(address, keystore, password, "ethereum", "")
+	originalKeystore, err := os.ReadFile(keystorePath)
 	if err != nil {
-		t.Errorf("Expected no error when overwriting files but got: %v", err)
+		t.Fatalf("Failed to read keystore file: %v", err)
+	}
+	originalPassword, err := os.ReadFile(passwordPath)
+	if err != nil {
+		t.Fatalf("Failed to read password file: %v", err)
+	}
+
+	err = service.SaveKeyStoreFilesToDisk(address, keystore, "DifferentPassword456!", "ethereum", "")
+	if err == nil {
+		t.Error("Expected collision error when saving over existing files but got none")
+	}
+
+	if content, readErr := os.ReadFile(keystorePath); readErr != nil {
+		t.Errorf("Failed to read keystore file after collision: %v", readErr)
+	} else if !bytes.Equal(content, originalKeystore) {
+		t.Error("Keystore file content changed after refused overwrite")
+	}
+	if content, readErr := os.ReadFile(passwordPath); readErr != nil {
+		t.Errorf("Failed to read password file after collision: %v", readErr)
+	} else if !bytes.Equal(content, originalPassword) {
+		t.Error("Password file content changed after refused overwrite")
 	}
 }
 
@@ -2894,4 +2873,359 @@ func TestKeyStoreServicePerformanceBenchmark(t *testing.T) {
 	if !testing.Short() && avgDuration > maxAvgDuration {
 		t.Errorf("Average keystore generation time %v exceeds threshold %v", avgDuration, maxAvgDuration)
 	}
+}
+
+func makeTestKeyStore(t *testing.T, address string) *KeyStoreV3 {
+	t.Helper()
+	keystore := NewKeyStoreV3(strings.TrimPrefix(address, "0x"), "ethereum")
+	keystore.SetScryptParams(262144, 8, 1, 32, bytes32(7))
+	keystore.SetCipherParams(bytes16(8), bytes32(9))
+	keystore.SetMAC(bytes32(10))
+	return keystore
+}
+
+func dirEntries(t *testing.T, dir string) map[string]os.FileInfo {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("Failed to read dir %s: %v", dir, err)
+	}
+	result := map[string]os.FileInfo{}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("Failed to stat %s: %v", e.Name(), err)
+		}
+		result[e.Name()] = info
+	}
+	return result
+}
+
+func TestSaveEthereumKeyStoreCanonicalNaming(t *testing.T) {
+	tmpDir := t.TempDir()
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+
+	address := "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e"
+	if err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), "TestPassword123!", "ethereum", ""); err != nil {
+		t.Fatalf("SaveKeyStoreFilesToDisk failed: %v", err)
+	}
+
+	entries := dirEntries(t, tmpDir)
+	jsonName := address + ".json"
+	pwdName := address + ".pwd"
+	if _, ok := entries[jsonName]; !ok {
+		t.Fatalf("expected keystore file %s, got %v", jsonName, entries)
+	}
+	if _, ok := entries[pwdName]; !ok {
+		t.Fatalf("expected password file %s, got %v", pwdName, entries)
+	}
+	for name, info := range entries {
+		if strings.HasPrefix(name, "UTC--") {
+			t.Fatalf("unexpected UTC-prefixed file: %s", name)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("file %s has permissions %o, expected 0600", name, info.Mode().Perm())
+		}
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected exactly 2 files, got %v", entries)
+	}
+}
+
+func TestSaveEthereumKeyStoreCollisionRefusesOverwrite(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+
+	preexisting := []struct {
+		name  string
+		setup func(t *testing.T, dir string) string
+	}{
+		{
+			name: "json only",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".json")
+				if err := os.WriteFile(path, []byte("existing json"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "pwd only",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".pwd")
+				if err := os.WriteFile(path, []byte("existing pwd"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "json is directory",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".json")
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "pwd is directory",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".pwd")
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "json is symlink",
+			setup: func(t *testing.T, dir string) string {
+				target := filepath.Join(dir, "elsewhere.json")
+				if err := os.WriteFile(target, []byte("data"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, address+".json")
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "pwd is dangling symlink",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".pwd")
+				if err := os.Symlink(filepath.Join(dir, "missing-target"), path); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+	}
+
+	for _, tt := range preexisting {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			blocker := tt.setup(t, tmpDir)
+			service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+
+			err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), "TestPassword123!", "ethereum", "")
+			if err == nil {
+				t.Fatal("expected collision error, got nil")
+			}
+			if !strings.Contains(err.Error(), "already exists") {
+				t.Fatalf("expected 'already exists' error, got: %v", err)
+			}
+
+			jsonPath := filepath.Join(tmpDir, address+".json")
+			pwdPath := filepath.Join(tmpDir, address+".pwd")
+			other := pwdPath
+			if blocker == pwdPath {
+				other = jsonPath
+			}
+			if _, lerr := os.Lstat(other); lerr == nil {
+				t.Fatalf("companion artifact %s was created despite collision", filepath.Base(other))
+			}
+
+			for name := range dirEntries(t, tmpDir) {
+				if strings.Contains(name, ".keystore-tmp-") {
+					t.Fatalf("temporary file left behind: %s", name)
+				}
+			}
+		})
+	}
+}
+
+func TestSaveMnemonicFileCollisionRefusesOverwrite(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+	mnemonic := "test walk nut penalty hip pave soap entry language right filter choice"
+
+	t.Run("existing mnemonic file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		path := filepath.Join(tmpDir, address+".mnemonic")
+		original := []byte("existing mnemonic")
+		if err := os.WriteFile(path, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+
+		err := service.SaveMnemonicFile(address, mnemonic, "ethereum")
+		if err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("expected collision error, got: %v", err)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(content, original) {
+			t.Fatal("existing mnemonic file was overwritten")
+		}
+	})
+
+	t.Run("mnemonic path is directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(tmpDir, address+".mnemonic"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+		if err := service.SaveMnemonicFile(address, mnemonic, "ethereum"); err == nil {
+			t.Fatal("expected collision error for directory at mnemonic path, got nil")
+		}
+	})
+
+	t.Run("mnemonic path is symlink", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		target := filepath.Join(tmpDir, "victim")
+		if err := os.WriteFile(target, []byte("victim"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(tmpDir, address+".mnemonic")); err != nil {
+			t.Fatal(err)
+		}
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+		if err := service.SaveMnemonicFile(address, mnemonic, "ethereum"); err == nil {
+			t.Fatal("expected collision error for symlink at mnemonic path, got nil")
+		}
+		content, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "victim" {
+			t.Fatal("symlink target was modified")
+		}
+	})
+}
+
+func TestWriteNewFileAtomicNoClobber(t *testing.T) {
+	tmpDir := t.TempDir()
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+
+	t.Run("creates new file", func(t *testing.T) {
+		path := filepath.Join(tmpDir, "new.json")
+		if err := service.writeNewFileAtomic(path, []byte("payload"), 0600); err != nil {
+			t.Fatalf("writeNewFileAtomic failed: %v", err)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "payload" {
+			t.Fatalf("unexpected content: %q", content)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("expected 0600 permissions, got %o", info.Mode().Perm())
+		}
+	})
+
+	t.Run("refuses existing file", func(t *testing.T) {
+		path := filepath.Join(tmpDir, "existing.json")
+		if err := os.WriteFile(path, []byte("keep me"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.writeNewFileAtomic(path, []byte("overwrite"), 0600); err == nil {
+			t.Fatal("expected error refusing to replace existing file, got nil")
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "keep me" {
+			t.Fatalf("existing file content changed: %q", content)
+		}
+		for name := range dirEntries(t, tmpDir) {
+			if strings.Contains(name, ".keystore-tmp-") {
+				t.Fatalf("temporary file left behind: %s", name)
+			}
+		}
+	})
+}
+
+func TestCheckMnemonicFileAvailable(t *testing.T) {
+	tmpDir := t.TempDir()
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+
+	if err := service.CheckMnemonicFileAvailable(address, "ethereum"); err != nil {
+		t.Fatalf("expected nil for free path, got: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, address+".mnemonic"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CheckMnemonicFileAvailable(address, "ethereum"); err == nil {
+		t.Fatal("expected collision error, got nil")
+	}
+
+	if err := service.CheckMnemonicFileAvailable("not-an-address", "ethereum"); err == nil {
+		t.Fatal("expected address validation error, got nil")
+	}
+}
+
+func TestGetKeystoreFilePathLegacyFallback(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+
+	t.Run("legacy UTC file found", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+		legacy := "UTC--2025-01-01T00-00-00.000000000Z--" + address + ".json"
+		if err := os.WriteFile(filepath.Join(tmpDir, legacy), []byte(`{}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := service.GetKeystoreFilePath(address)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != legacy {
+			t.Fatalf("expected legacy file %s, got %s", legacy, got)
+		}
+	})
+
+	t.Run("canonical preferred over legacy", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+		canonical := address + ".json"
+		legacy := "UTC--2025-01-01T00-00-00.000000000Z--" + address + ".json"
+		for _, name := range []string{canonical, legacy} {
+			if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(`{}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := service.GetKeystoreFilePath(address)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != canonical {
+			t.Fatalf("expected canonical file %s, got %s", canonical, got)
+		}
+	})
+
+	t.Run("missing directory returns canonical path", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "does-not-exist")
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: missing})
+		got, err := service.GetKeystoreFilePath(address)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(missing, address+".json")
+		if got != want {
+			t.Fatalf("expected %s, got %s", want, got)
+		}
+	})
+
+	t.Run("canonical path that is not a regular file errors", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+		if err := os.Mkdir(filepath.Join(tmpDir, address+".json"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.GetKeystoreFilePath(address); err == nil {
+			t.Fatal("expected error for non-regular canonical path, got nil")
+		}
+	})
 }
