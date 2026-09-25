@@ -47,6 +47,9 @@ jobs:
           ${{ runner.os }}-go-${{ matrix.go-version }}-
           ${{ runner.os }}-go-
 
+    - name: Test release version selection
+      run: python3 -m unittest discover -s .github/tests -p 'test_version_bump.py' -v
+
     - name: Download dependencies
       run: go mod download
 
