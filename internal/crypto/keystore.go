@@ -1295,7 +1295,7 @@ func (ks *KeyStoreService) GenerateKeyStore(privateKeyHex, address, network stri
 	}
 
 	// Generate secure password
-	password, err := ks.passwordGen.GenerateSecurePassword()
+	password, err := ks.passwordGen.GenerateWordPassword()
 	if err != nil {
 		return nil, "", NewRecoverableKeyStoreError("generate", "password", err,
 			"Failed to generate secure password. This might be due to insufficient system entropy. Please try again.")
@@ -1489,20 +1489,17 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 	// Format address with 0x prefix for Ethereum
 	formattedAddress := formatAddressForFilename(address, "ethereum")
 
-	// Get file paths; use the geth-compatible UTC--<timestamp>--<address>.json
-	// naming convention so tools (geth, MyCrypto, Firefly) can import the file.
-	keystorePath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("UTC--%s--%s.json", utcTimestamp(), formattedAddress))
-	passwordPath := filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.pwd", formattedAddress))
+	// Get file paths; keystore JSON and its password sidecar share the
+	// address as a common basename.
+	keystorePath := filepath.Join(ks.config.OutputDirectory, formattedAddress+".json")
+	passwordPath := filepath.Join(ks.config.OutputDirectory, formattedAddress+".pwd")
 
-	// Check if files already exist and warn (but don't fail)
-	if _, err := ks.FileExists(keystorePath); err != nil {
-		return NewRecoverableKeyStoreError("save", "file_check", err,
-			"Failed to check if keystore file already exists. Please try again.")
-	}
-
-	if _, err := ks.FileExists(passwordPath); err != nil {
-		return NewRecoverableKeyStoreError("save", "file_check", err,
-			"Failed to check if password file already exists. Please try again.")
+	for _, path := range []string{keystorePath, passwordPath} {
+		if _, err := os.Lstat(path); err == nil {
+			return NewKeyStoreErrorWithPath("save", "existing_file", path, fmt.Errorf("file already exists; refusing to overwrite"))
+		} else if !os.IsNotExist(err) {
+			return NewKeyStoreErrorWithPath("save", "file_check", path, err)
+		}
 	}
 
 	// Serialize keystore to JSON
@@ -1513,7 +1510,7 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 
 	// Write keystore file atomically with secure permissions (600)
 	ks.logger.LogDebug(fmt.Sprintf("Writing keystore file: %s", keystorePath))
-	if err := ks.writeFileAtomic(keystorePath, keystoreJSON, 0600); err != nil {
+	if err := ks.writeNewFileAtomic(keystorePath, keystoreJSON, 0600); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write keystore file %s: %v", keystorePath, err))
 		return NewRecoverableKeyStoreError("save", "keystore_file", err,
 			fmt.Sprintf("Failed to save keystore file to '%s'. Please check disk space and permissions.", keystorePath))
@@ -1522,7 +1519,7 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 
 	// Write password file atomically with secure permissions (600)
 	ks.logger.LogDebug(fmt.Sprintf("Writing password file: %s", passwordPath))
-	if err := ks.writeFileAtomic(passwordPath, []byte(password), 0600); err != nil {
+	if err := ks.writeNewFileAtomic(passwordPath, []byte(password), 0600); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write password file %s: %v", passwordPath, err))
 		// If password file fails, try to clean up keystore file
 		ks.logger.LogDebug(fmt.Sprintf("Attempting to clean up keystore file: %s", keystorePath))
@@ -1634,13 +1631,12 @@ func (ks *KeyStoreService) SaveMnemonicFile(address, mnemonic, network string) e
 	}
 
 	// Check if file already exists
-	if _, err := ks.FileExists(mnemonicPath); err != nil {
-		return NewRecoverableKeyStoreError("save", "file_check", err,
-			"Failed to check if mnemonic file already exists. Please try again.")
+	if err := ks.CheckMnemonicFileAvailable(address, network); err != nil {
+		return err
 	}
 
 	ks.logger.LogDebug(fmt.Sprintf("Writing mnemonic file: %s", mnemonicPath))
-	if err := ks.writeFileAtomic(mnemonicPath, []byte(mnemonic), 0600); err != nil {
+	if err := ks.writeNewFileAtomic(mnemonicPath, []byte(mnemonic), 0600); err != nil {
 		ks.logger.LogError(fmt.Sprintf("Failed to write mnemonic file %s: %v", mnemonicPath, err))
 		return NewRecoverableKeyStoreError("save", "mnemonic_file", err,
 			fmt.Sprintf("Failed to save mnemonic file to '%s'. Please check disk space and permissions.", mnemonicPath))
@@ -1726,6 +1722,14 @@ func (ks *KeyStoreService) ensureOutputDirectory() error {
 
 // writeFileAtomic writes data to a file atomically using a temporary file with enhanced error handling
 func (ks *KeyStoreService) writeFileAtomic(filename string, data []byte, perm os.FileMode) error {
+	return ks.writeFileAtomicWithMode(filename, data, perm, false)
+}
+
+func (ks *KeyStoreService) writeNewFileAtomic(filename string, data []byte, perm os.FileMode) error {
+	return ks.writeFileAtomicWithMode(filename, data, perm, true)
+}
+
+func (ks *KeyStoreService) writeFileAtomicWithMode(filename string, data []byte, perm os.FileMode, noReplace bool) error {
 	// Validate inputs
 	if filename == "" {
 		return fmt.Errorf("filename cannot be empty")
@@ -1747,7 +1751,7 @@ func (ks *KeyStoreService) writeFileAtomic(filename string, data []byte, perm os
 	}
 
 	// Check if target file already exists and handle accordingly
-	if _, err := os.Stat(cleanFilename); err == nil {
+	if _, err := os.Lstat(cleanFilename); err == nil {
 		// File exists - we'll overwrite it atomically
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to check existing file %s: %w", cleanFilename, err)
@@ -1769,7 +1773,7 @@ func (ks *KeyStoreService) writeFileAtomic(filename string, data []byte, perm os
 			_ = tmpFile.Close()
 		}
 		// Remove temp file if write failed
-		if writeErr != nil {
+		if writeErr != nil || noReplace {
 			_ = os.Remove(tmpPath)
 		}
 	}()
@@ -1816,8 +1820,12 @@ func (ks *KeyStoreService) writeFileAtomic(filename string, data []byte, perm os
 	}
 
 	// Atomically move temporary file to final location
-	if err := os.Rename(tmpPath, cleanFilename); err != nil {
-		writeErr = fmt.Errorf("failed to move temporary file to final location %s: %w", cleanFilename, err)
+	publish := os.Rename
+	if noReplace {
+		publish = os.Link
+	}
+	if err := publish(tmpPath, cleanFilename); err != nil {
+		writeErr = fmt.Errorf("failed to publish file to %s: %w", cleanFilename, err)
 		return writeErr
 	}
 
@@ -1928,9 +1936,9 @@ func (ks *KeyStoreService) FileExists(filename string) (bool, error) {
 }
 
 // GetKeystoreFilePath returns the full path for a keystore file given an
-// address. Keystore files use the geth naming convention
-// UTC--<timestamp>--<address>.json, so the file is located by scanning the
-// output directory for a matching address suffix.
+// address. The canonical <address>.json name is preferred; if absent, the
+// output directory is scanned for a legacy UTC--<timestamp>--<address>.json
+// file so keystores written by older versions remain readable.
 func (ks *KeyStoreService) GetKeystoreFilePath(address string) (string, error) {
 	cleanAddress := strings.TrimPrefix(address, "0x")
 	if len(cleanAddress) == 0 {
@@ -1938,8 +1946,21 @@ func (ks *KeyStoreService) GetKeystoreFilePath(address string) (string, error) {
 	}
 
 	formatted := formatAddressForFilename(address, "ethereum")
+	canonical := filepath.Join(ks.config.OutputDirectory, formatted+".json")
+	if info, err := os.Lstat(canonical); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", &FileOperationError{Operation: "stat", Path: canonical, Err: fmt.Errorf("path exists but is not a regular file")}
+		}
+		return canonical, nil
+	} else if !os.IsNotExist(err) {
+		return "", &FileOperationError{Operation: "stat", Path: canonical, Err: err}
+	}
+
 	entries, err := os.ReadDir(ks.config.OutputDirectory)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return canonical, nil
+		}
 		return "", &FileOperationError{Operation: "read_dir", Path: ks.config.OutputDirectory, Err: err}
 	}
 	suffix := fmt.Sprintf("--%s.json", formatted)
@@ -1952,14 +1973,7 @@ func (ks *KeyStoreService) GetKeystoreFilePath(address string) (string, error) {
 			return filepath.Join(ks.config.OutputDirectory, name), nil
 		}
 	}
-	// Fall back to the legacy <address>.json name for backwards compatibility.
-	return filepath.Join(ks.config.OutputDirectory, fmt.Sprintf("%s.json", formatted)), nil
-}
-
-// utcTimestamp returns the geth-style UTC timestamp used in keystore file
-// names: UTC--2006-01-02T15-04-05.000000000Z--<address>.json
-func utcTimestamp() string {
-	return time.Now().UTC().Format("2006-01-02T15-04-05.000000000Z")
+	return canonical, nil
 }
 
 // GetPasswordFilePath returns the full path for a password file given an address
@@ -1982,6 +1996,19 @@ func (ks *KeyStoreService) GetMnemonicFilePath(address string) (string, error) {
 
 	filename := fmt.Sprintf("%s.mnemonic", formatAddressForFilename(address, "ethereum"))
 	return filepath.Join(ks.config.OutputDirectory, filename), nil
+}
+
+func (ks *KeyStoreService) CheckMnemonicFileAvailable(address, network string) error {
+	if err := validateAddressForNetwork(address, network); err != nil {
+		return NewKeyStoreErrorWithAddress("validate", "address", address, err)
+	}
+	path := filepath.Join(ks.config.OutputDirectory, formatAddressForFilename(address, network)+".mnemonic")
+	if _, err := os.Lstat(path); err == nil {
+		return NewKeyStoreErrorWithPath("save", "existing_file", path, fmt.Errorf("file already exists; refusing to overwrite"))
+	} else if !os.IsNotExist(err) {
+		return NewKeyStoreErrorWithPath("save", "file_check", path, err)
+	}
+	return nil
 }
 
 // RemoveKeystoreFiles removes both keystore and password files for a given address

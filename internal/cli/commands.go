@@ -28,11 +28,12 @@ import (
 
 // Application represents the CLI application
 type Application struct {
-	config    *config.Config
-	rootCmd   *cobra.Command
-	version   string
-	gitCommit string
-	buildTime string
+	config            *config.Config
+	rootCmd           *cobra.Command
+	version           string
+	gitCommit         string
+	buildTime         string
+	tuiProgramOptions []tea.ProgramOption
 }
 
 // NewApplication creates a new CLI application
@@ -288,7 +289,7 @@ func (app *Application) generateSingleWalletTUI(
 	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
-	program := tea.NewProgram(progressModel)
+	program := tea.NewProgram(progressModel, app.tuiProgramOptions...)
 
 	// Channel for wallet results (like in monolithic version)
 	walletResultsChan := make(chan tui.WalletResult, 1)
@@ -298,6 +299,7 @@ func (app *Application) generateSingleWalletTUI(
 	var shutdownOnce sync.Once // Ensure channel is closed only once
 
 	// Start progress updates (like in monolithic version)
+	resultsCh := (<-chan tui.WalletResult)(walletResultsChan)
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
@@ -306,7 +308,7 @@ func (app *Application) generateSingleWalletTUI(
 			select {
 			case <-shutdownChan:
 				// Send quit message and exit
-				program.Send(tui.SendQuit())
+				program.Send(tui.QuitMsg{})
 				return
 
 			case <-ticker.C:
@@ -339,11 +341,11 @@ func (app *Application) generateSingleWalletTUI(
 					IsComplete:       false,
 				})
 
-			case walletResult, ok := <-walletResultsChan:
+			case walletResult, ok := <-resultsCh:
 				if !ok {
 					// Channel closed, exit
-					shutdownOnce.Do(func() { close(shutdownChan) })
-					return
+					resultsCh = nil
+					continue
 				}
 
 				// Send wallet result to TUI
@@ -377,12 +379,18 @@ func (app *Application) generateSingleWalletTUI(
 	// Start wallet generation in background (like in monolithic version)
 	var result *wallet.GenerationResult
 	var genErr error
+	var persistenceErr error
+	generationCtx, cancelGeneration := context.WithCancel(ctx)
+	defer cancelGeneration()
+	generationDone := make(chan struct{})
 
 	go func() {
+		defer close(generationDone)
+
 		// Small delay to let TUI initialize
 		time.Sleep(200 * time.Millisecond)
 
-		genResult, err := workerPool.GenerateWalletWithContext(ctx, criteria)
+		genResult, err := workerPool.GenerateWalletWithContext(generationCtx, criteria)
 		if err != nil {
 			genErr = err
 			shutdownOnce.Do(func() { close(shutdownChan) })
@@ -394,9 +402,10 @@ func (app *Application) generateSingleWalletTUI(
 		// Generate and save keystore files if enabled (silent mode for TUI)
 		if app.config.KeyStore.Enabled {
 			if err := app.generateAndSaveKeystoreWithVerbose(genResult.Wallet, false); err != nil {
-				if !app.config.CLI.QuietMode {
-					fmt.Printf("Warning: Failed to generate keystore: %v\n", err)
-				}
+				persistenceErr = fmt.Errorf("failed to persist wallet %s: %w", genResult.Wallet.Address, err)
+				genErr = persistenceErr
+				shutdownOnce.Do(func() { close(shutdownChan) })
+				return
 			}
 		}
 
@@ -410,7 +419,7 @@ func (app *Application) generateSingleWalletTUI(
 			Time:       genResult.Duration,
 			Error:      "",
 		}:
-		case <-ctx.Done():
+		case <-generationCtx.Done():
 		}
 
 		// Close the channel to signal completion
@@ -419,9 +428,25 @@ func (app *Application) generateSingleWalletTUI(
 
 	// Run the TUI program (this blocks until quit)
 	if _, err := program.Run(); err != nil {
+		cancelGeneration()
+		shutdownOnce.Do(func() { close(shutdownChan) })
+		<-generationDone
+		if persistenceErr != nil {
+			return persistenceErr
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if result != nil {
+			return fmt.Errorf("TUI failed after wallet generation: %w", err)
+		}
 		fmt.Printf("TUI failed: %v, falling back to text mode\n", err)
 		return app.generateSingleWalletText(ctx, workerPool, criteria, true)
 	}
+
+	cancelGeneration()
+	shutdownOnce.Do(func() { close(shutdownChan) })
+	<-generationDone
 
 	// Check for generation error
 	if genErr != nil {
@@ -538,7 +563,7 @@ func (app *Application) generateMultipleWalletsTUI(
 	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
-	program := tea.NewProgram(progressModel)
+	program := tea.NewProgram(progressModel, app.tuiProgramOptions...)
 
 	// Channels for communication (like in monolithic version)
 	walletResultsChan := make(chan tui.WalletResult, count)
@@ -551,6 +576,7 @@ func (app *Application) generateMultipleWalletsTUI(
 	var results []*wallet.GenerationResult
 
 	// Start progress updates (like in monolithic version)
+	resultsCh := (<-chan tui.WalletResult)(walletResultsChan)
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
@@ -559,7 +585,7 @@ func (app *Application) generateMultipleWalletsTUI(
 			select {
 			case <-shutdownChan:
 				// Send quit message and exit
-				program.Send(tui.SendQuit())
+				program.Send(tui.QuitMsg{})
 				return
 
 			case <-ticker.C:
@@ -609,11 +635,11 @@ func (app *Application) generateMultipleWalletsTUI(
 					IsComplete:       currentCompleted >= count,
 				})
 
-			case walletResult, ok := <-walletResultsChan:
+			case walletResult, ok := <-resultsCh:
 				if !ok {
 					// Channel closed, exit
-					shutdownOnce.Do(func() { close(shutdownChan) })
-					return
+					resultsCh = nil
+					continue
 				}
 
 				// Send wallet result to TUI first
@@ -654,8 +680,14 @@ func (app *Application) generateMultipleWalletsTUI(
 
 	// Start wallet generation in background (like in monolithic version)
 	var genErr error
+	var persistenceErr error
+	generationCtx, cancelGeneration := context.WithCancel(ctx)
+	defer cancelGeneration()
+	generationDone := make(chan struct{})
 
 	go func() {
+		defer close(generationDone)
+
 		// Small delay to let TUI initialize
 		time.Sleep(200 * time.Millisecond)
 
@@ -663,14 +695,14 @@ func (app *Application) generateMultipleWalletsTUI(
 
 		for i := 0; i < count; i++ {
 			select {
-			case <-ctx.Done():
-				genErr = ctx.Err()
+			case <-generationCtx.Done():
+				genErr = generationCtx.Err()
 				shutdownOnce.Do(func() { close(shutdownChan) })
 				return
 			default:
 			}
 
-			result, err := workerPool.GenerateWalletWithContext(ctx, criteria)
+			result, err := workerPool.GenerateWalletWithContext(generationCtx, criteria)
 			if err != nil {
 				// Send error result to TUI
 				select {
@@ -678,7 +710,7 @@ func (app *Application) generateMultipleWalletsTUI(
 					Index: i + 1,
 					Error: err.Error(),
 				}:
-				case <-ctx.Done():
+				case <-generationCtx.Done():
 					return
 				}
 
@@ -694,9 +726,10 @@ func (app *Application) generateMultipleWalletsTUI(
 			// Generate and save keystore files if enabled (silent mode for TUI)
 			if app.config.KeyStore.Enabled {
 				if err := app.generateAndSaveKeystoreWithVerbose(result.Wallet, false); err != nil {
-					if !app.config.CLI.QuietMode {
-						fmt.Printf("Warning: Failed to generate keystore for wallet %d: %v\n", i+1, err)
-					}
+					persistenceErr = fmt.Errorf("failed to persist wallet %s: %w", result.Wallet.Address, err)
+					genErr = persistenceErr
+					shutdownOnce.Do(func() { close(shutdownChan) })
+					return
 				}
 			}
 
@@ -715,7 +748,7 @@ func (app *Application) generateMultipleWalletsTUI(
 				Time:       result.Duration,
 				Error:      "",
 			}:
-			case <-ctx.Done():
+			case <-generationCtx.Done():
 				return
 			}
 		}
@@ -727,9 +760,25 @@ func (app *Application) generateMultipleWalletsTUI(
 
 	// Run the TUI program (this blocks until quit)
 	if _, err := program.Run(); err != nil {
+		cancelGeneration()
+		shutdownOnce.Do(func() { close(shutdownChan) })
+		<-generationDone
+		if persistenceErr != nil {
+			return persistenceErr
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if len(results) > 0 {
+			return fmt.Errorf("TUI failed after wallet generation: %w", err)
+		}
 		fmt.Printf("TUI failed: %v, falling back to text mode\n", err)
 		return app.generateMultipleWalletsText(ctx, workerPool, criteria, count, true)
 	}
+
+	cancelGeneration()
+	shutdownOnce.Do(func() { close(shutdownChan) })
+	<-generationDone
 
 	// Check for generation error
 	if genErr != nil {
@@ -1667,7 +1716,6 @@ func formatBool(b bool) string {
 
 // Placeholder implementations for display functions
 func (app *Application) displayWalletResult(result *wallet.GenerationResult, showProgress bool) error {
-	fmt.Printf("Wallet generated successfully!\n")
 	fmt.Printf("Address: %s\n", result.Wallet.Address)
 	fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
 	if result.Wallet.Mnemonic != "" {
@@ -1688,15 +1736,15 @@ func (app *Application) displayWalletResult(result *wallet.GenerationResult, sho
 	// Generate keystore if enabled
 	if app.config.KeyStore.Enabled {
 		if err := app.generateAndSaveKeystore(result.Wallet); err != nil {
-			fmt.Printf("Warning: Failed to generate keystore: %v\n", err)
-		} else {
-			fmt.Printf("Keystore saved to: %s\n", app.config.KeyStore.OutputDir)
-			if result.Wallet.Mnemonic != "" {
-				fmt.Printf("Mnemonic saved to: %s\n", app.config.KeyStore.OutputDir)
-			}
+			return fmt.Errorf("failed to persist wallet %s: %w", result.Wallet.Address, err)
+		}
+		fmt.Printf("Keystore saved to: %s\n", app.config.KeyStore.OutputDir)
+		if result.Wallet.Mnemonic != "" {
+			fmt.Printf("Mnemonic saved to: %s\n", app.config.KeyStore.OutputDir)
 		}
 	}
 
+	fmt.Printf("Wallet generated successfully!\n")
 	return nil
 }
 
@@ -1706,7 +1754,7 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		return nil
 	}
 
-	fmt.Printf("Generated %d wallets successfully!\n", len(results))
+	fmt.Printf("Generated %d wallets:\n", len(results))
 	fmt.Printf("Total attempts: %s\n", formatLargeNumber(totalAttempts))
 	fmt.Printf("Total duration: %s\n", formatDuration(totalDuration))
 	fmt.Printf("Average speed: %.0f addr/s\n\n", float64(totalAttempts)/totalDuration.Seconds())
@@ -1792,7 +1840,7 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		fmt.Printf("  Success rate: %.2f%%\n", float64(len(results))/float64(totalAttempts)*100)
 	}
 
-	return nil
+	return stderrors.Join(keystoreErrors...)
 }
 
 // GetRootCommand returns the root command for fang integration
@@ -1890,6 +1938,12 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 	// Create keystore service with controlled verbose logging
 	keystoreService := crypto.NewKeyStoreService(keystoreConfig)
 	keystoreService.SetVerboseMode(verbose)
+
+	if w.Mnemonic != "" {
+		if err := keystoreService.CheckMnemonicFileAvailable(w.Address, w.Network); err != nil {
+			return fmt.Errorf("failed to save mnemonic file for address %s: %w", w.Address, err)
+		}
+	}
 
 	// Generate keystore first to get complete parameters
 	keystore, password, err := keystoreService.GenerateKeyStore(w.PrivateKey, w.Address, w.Network)

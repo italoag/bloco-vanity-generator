@@ -1,9 +1,13 @@
 package crypto
 
 import (
+	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/tyler-smith/go-bip39/wordlists"
 )
 
 func TestNewPasswordGenerator(t *testing.T) {
@@ -517,5 +521,97 @@ func TestPasswordGeneration_EdgeCases(t *testing.T) {
 	}
 	if !strings.Contains(password, "!") {
 		t.Errorf("Password missing required special '!': %s", password)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("simulated entropy failure")
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(b []byte) (int, error) {
+	for i := range b {
+		b[i] = 0
+	}
+	return len(b), nil
+}
+
+func TestGenerateWordPasswordFormat(t *testing.T) {
+	pg := NewPasswordGenerator()
+	componentPattern := regexp.MustCompile(`^[A-Z][a-z]+[0-9]?$`)
+
+	wordSet := make(map[string]bool, len(wordlists.English))
+	for _, w := range wordlists.English {
+		wordSet[w] = true
+	}
+
+	for i := 0; i < 100; i++ {
+		password, err := pg.GenerateWordPassword()
+		if err != nil {
+			t.Fatalf("GenerateWordPassword failed: %v", err)
+		}
+
+		if len(password) < 12 {
+			t.Fatalf("password too short: %d chars", len(password))
+		}
+
+		var separators []rune
+		for _, r := range password {
+			if strings.ContainsRune("+-_:", r) {
+				separators = append(separators, r)
+			}
+		}
+		if len(separators) != 2 || separators[0] != separators[1] {
+			t.Fatalf("expected exactly two identical separators, got %d", len(separators))
+		}
+
+		components := strings.FieldsFunc(password, func(r rune) bool {
+			return strings.ContainsRune("+-_:", r)
+		})
+		if len(components) != 3 {
+			t.Fatalf("expected 3 word components, got %d", len(components))
+		}
+
+		digitCount := 0
+		for _, component := range components {
+			if !componentPattern.MatchString(component) {
+				t.Fatalf("component does not match expected word format")
+			}
+			last := component[len(component)-1]
+			base := component
+			if last >= '0' && last <= '9' {
+				digitCount++
+				base = component[:len(component)-1]
+			}
+			if !wordSet[strings.ToLower(base)] {
+				t.Fatalf("component is not in the BIP-39 English wordlist")
+			}
+		}
+		if digitCount < 1 || digitCount > 3 {
+			t.Fatalf("expected 1..3 digit suffixes, got %d", digitCount)
+		}
+	}
+}
+
+func TestGenerateWordPasswordEntropyFailure(t *testing.T) {
+	password, err := generateWordPassword(failingReader{})
+	if err == nil {
+		t.Fatal("expected error when entropy source fails, got nil")
+	}
+	if password != "" {
+		t.Fatal("expected empty password on failure")
+	}
+}
+
+func TestGenerateWordPasswordDeterministicZeroReader(t *testing.T) {
+	password, err := generateWordPassword(zeroReader{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if password != "Abandon0+Abandon+Abandon" {
+		t.Fatalf("unexpected deterministic password: %q", password)
 	}
 }
