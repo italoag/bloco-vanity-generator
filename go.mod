@@ -1,6 +1,6 @@
 module bloco-vgen
 
-go 1.25.13
+go 1.26.8
 
 require (
 	github.com/btcsuite/btcd v0.25.0

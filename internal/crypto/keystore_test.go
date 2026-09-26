@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1392,10 +1393,7 @@ func TestKeyStoreService_GenerateKeyStore(t *testing.T) {
 			}
 
 			// Verify password complexity
-			passwordGen := NewPasswordGenerator()
-			if err := passwordGen.ValidatePassword(password); err != nil {
-				t.Errorf("Generated password does not meet complexity requirements: %v", err)
-			}
+			assertWordPasswordFormat(t, password)
 
 			// Verify we can decrypt the private key
 			decryptedKey, err := DecryptPrivateKey(keystore, password)
@@ -1498,24 +1496,11 @@ func TestKeyStoreService_SaveKeyStoreFiles(t *testing.T) {
 				t.Fatalf("Unexpected error: %v", err)
 			}
 
-			// Verify files were created (keystore uses the geth naming
-			// convention UTC--<timestamp>--<address>.json)
-			cleanAddress := strings.ToLower(strings.TrimPrefix(tt.address, "0x"))
-			keystoreFile := ""
-			entries, err := os.ReadDir(tempDir)
-			if err != nil {
-				t.Fatalf("Failed to read output directory: %v", err)
-			}
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), fmt.Sprintf("--0x%s.json", cleanAddress)) {
-					keystoreFile = filepath.Join(tempDir, entry.Name())
-					break
-				}
-			}
-			if keystoreFile == "" {
-				t.Errorf("Keystore file (UTC--*--0x%s.json) was not created", cleanAddress)
-			}
-			passwordFile := filepath.Join(tempDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
+			// Verify files were created using the canonical
+			// <address>.json / <address>.pwd naming convention.
+			formattedAddress := formatAddressForFilename(tt.address, "ethereum")
+			keystoreFile := filepath.Join(tempDir, formattedAddress+".json")
+			passwordFile := filepath.Join(tempDir, fmt.Sprintf("%s.pwd", formattedAddress))
 
 			// Check keystore file exists and has correct content
 			if _, err := os.Stat(keystoreFile); os.IsNotExist(err) {
@@ -1600,17 +1585,10 @@ func TestKeyStoreService_SaveKeyStoreFilesPreservesEthereumFilenameCase(t *testi
 		names[entry.Name()] = true
 	}
 
-	// The keystore file uses the geth naming convention with a UTC timestamp
-	// prefix; verify the address suffix and case are preserved.
-	foundKeystore := false
-	for name := range names {
-		if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, "--"+address+".json") {
-			foundKeystore = true
-			break
-		}
-	}
-	if !foundKeystore {
-		t.Fatalf("expected keystore filename UTC--*--%s.json, got %v", address, names)
+	// The keystore file uses the canonical <address>.json naming; verify the
+	// address case is preserved.
+	if !names[address+".json"] {
+		t.Fatalf("expected keystore filename %s.json, got %v", address, names)
 	}
 
 	if !names[address+".pwd"] {
@@ -1745,7 +1723,7 @@ func TestKeyStoreService_EndToEndWorkflow(t *testing.T) {
 
 	for _, kdf := range kdfs {
 		t.Run(fmt.Sprintf("end_to_end_%s", kdf), func(t *testing.T) {
-			// Use a dedicated directory per KDF so the UTC--* file lookup
+			// Use a dedicated directory per KDF so the file lookup
 			// cannot pick up a file from a previous subtest.
 			subDir := filepath.Join(tempDir, kdf)
 			if err := os.MkdirAll(subDir, 0755); err != nil {
@@ -1774,22 +1752,12 @@ func TestKeyStoreService_EndToEndWorkflow(t *testing.T) {
 			}
 
 			// Verify we can load and decrypt the keystore
-			cleanAddress := strings.ToLower(strings.TrimPrefix(address, "0x"))
-			keystoreFile := ""
-			entries, err := os.ReadDir(subDir)
-			if err != nil {
-				t.Fatalf("Failed to read output directory: %v", err)
+			formattedAddress := formatAddressForFilename(address, "ethereum")
+			keystoreFile := filepath.Join(subDir, formattedAddress+".json")
+			if _, err := os.Stat(keystoreFile); err != nil {
+				t.Fatalf("Keystore file (%s.json) was not created: %v", formattedAddress, err)
 			}
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), fmt.Sprintf("--0x%s.json", cleanAddress)) {
-					keystoreFile = filepath.Join(subDir, entry.Name())
-					break
-				}
-			}
-			if keystoreFile == "" {
-				t.Fatalf("Keystore file (UTC--*--0x%s.json) was not created", cleanAddress)
-			}
-			passwordFile := filepath.Join(subDir, fmt.Sprintf("0x%s.pwd", cleanAddress))
+			passwordFile := filepath.Join(subDir, fmt.Sprintf("%s.pwd", formattedAddress))
 
 			// Load keystore from file
 			keystoreData, err := os.ReadFile(keystoreFile)
@@ -2225,7 +2193,7 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "valid address with 0x prefix",
 			address:          "0x1234567890abcdef1234567890abcdef12345678",
-			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0x1234567890abcdef1234567890abcdef12345678.json",
+			wantKeystoreName: "0x1234567890abcdef1234567890abcdef12345678.json",
 			wantPasswordPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd"),
 			wantMnemonicPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.mnemonic"),
 			wantError:        false,
@@ -2233,7 +2201,7 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "valid address without 0x prefix",
 			address:          "1234567890abcdef1234567890abcdef12345678",
-			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0x1234567890abcdef1234567890abcdef12345678.json",
+			wantKeystoreName: "0x1234567890abcdef1234567890abcdef12345678.json",
 			wantPasswordPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd"),
 			wantMnemonicPath: filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.mnemonic"),
 			wantError:        false,
@@ -2241,7 +2209,7 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 		{
 			name:             "mixed case ethereum address",
 			address:          "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e",
-			wantKeystoreName: "UTC--2025-01-01T00-00-00.000000000Z--0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
+			wantKeystoreName: "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.json",
 			wantPasswordPath: filepath.Join(tmpDir, "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.pwd"),
 			wantMnemonicPath: filepath.Join(tmpDir, "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e.mnemonic"),
 			wantError:        false,
@@ -2257,8 +2225,8 @@ func TestKeyStoreService_GetFilePaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a keystore file matching the new naming convention so the
-			// directory scan can find it.
+			// Create a keystore file matching the canonical naming convention
+			// so the lookup can find it.
 			if !tt.wantError {
 				keystoreName := tt.wantKeystoreName
 				if err := os.WriteFile(filepath.Join(tmpDir, keystoreName), []byte(`{}`), 0600); err != nil {
@@ -2488,20 +2456,10 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 		t.Errorf("Expected no error but got: %v", err)
 	}
 
-	// Verify files exist with correct permissions (UTC-- naming convention)
-	var keystorePath string
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to read output directory: %v", err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "UTC--") && strings.HasSuffix(entry.Name(), "--0x"+address+".json") {
-			keystorePath = filepath.Join(tmpDir, entry.Name())
-			break
-		}
-	}
-	if keystorePath == "" {
-		t.Fatalf("Keystore file (UTC--*--0x%s.json) was not created", address)
+	// Verify files exist with correct permissions (canonical <address>.* naming)
+	keystorePath := filepath.Join(tmpDir, "0x"+address+".json")
+	if _, err := os.Stat(keystorePath); err != nil {
+		t.Fatalf("Keystore file (0x%s.json) was not created: %v", address, err)
 	}
 	passwordPath := filepath.Join(tmpDir, "0x1234567890abcdef1234567890abcdef12345678.pwd")
 
@@ -2517,10 +2475,29 @@ func TestKeyStoreService_SaveKeyStoreFiles_EnhancedErrorHandling(t *testing.T) {
 		t.Errorf("Password file should have 0600 permissions, got %o", info.Mode().Perm())
 	}
 
-	// Test overwriting existing files
-	err = service.SaveKeyStoreFilesToDisk(address, keystore, password, "ethereum", "")
+	originalKeystore, err := os.ReadFile(keystorePath)
 	if err != nil {
-		t.Errorf("Expected no error when overwriting files but got: %v", err)
+		t.Fatalf("Failed to read keystore file: %v", err)
+	}
+	originalPassword, err := os.ReadFile(passwordPath)
+	if err != nil {
+		t.Fatalf("Failed to read password file: %v", err)
+	}
+
+	err = service.SaveKeyStoreFilesToDisk(address, keystore, "DifferentPassword456!", "ethereum", "")
+	if err == nil {
+		t.Error("Expected collision error when saving over existing files but got none")
+	}
+
+	if content, readErr := os.ReadFile(keystorePath); readErr != nil {
+		t.Errorf("Failed to read keystore file after collision: %v", readErr)
+	} else if !bytes.Equal(content, originalKeystore) {
+		t.Error("Keystore file content changed after refused overwrite")
+	}
+	if content, readErr := os.ReadFile(passwordPath); readErr != nil {
+		t.Errorf("Failed to read password file after collision: %v", readErr)
+	} else if !bytes.Equal(content, originalPassword) {
+		t.Error("Password file content changed after refused overwrite")
 	}
 }
 
@@ -2894,4 +2871,1049 @@ func TestKeyStoreServicePerformanceBenchmark(t *testing.T) {
 	if !testing.Short() && avgDuration > maxAvgDuration {
 		t.Errorf("Average keystore generation time %v exceeds threshold %v", avgDuration, maxAvgDuration)
 	}
+}
+
+func makeTestKeyStore(t *testing.T, address string) *KeyStoreV3 {
+	t.Helper()
+	keystore := NewKeyStoreV3(strings.TrimPrefix(address, "0x"), "ethereum")
+	keystore.SetScryptParams(262144, 8, 1, 32, bytes32(7))
+	keystore.SetCipherParams(bytes16(8), bytes32(9))
+	keystore.SetMAC(bytes32(10))
+	return keystore
+}
+
+func dirEntries(t *testing.T, dir string) map[string]os.FileInfo {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("Failed to read dir %s: %v", dir, err)
+	}
+	result := map[string]os.FileInfo{}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("Failed to stat %s: %v", e.Name(), err)
+		}
+		result[e.Name()] = info
+	}
+	return result
+}
+
+func TestSaveEthereumKeyStoreCanonicalNaming(t *testing.T) {
+	tmpDir := t.TempDir()
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+
+	address := "0xDEaD70220f96970E686E56C7ed6b8376bADaAF6e"
+	if err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), "TestPassword123!", "ethereum", ""); err != nil {
+		t.Fatalf("SaveKeyStoreFilesToDisk failed: %v", err)
+	}
+
+	entries := dirEntries(t, tmpDir)
+	jsonName := address + ".json"
+	pwdName := address + ".pwd"
+	if _, ok := entries[jsonName]; !ok {
+		t.Fatalf("expected keystore file %s, got %v", jsonName, entries)
+	}
+	if _, ok := entries[pwdName]; !ok {
+		t.Fatalf("expected password file %s, got %v", pwdName, entries)
+	}
+	for name, info := range entries {
+		if strings.HasPrefix(name, "UTC--") {
+			t.Fatalf("unexpected UTC-prefixed file: %s", name)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("file %s has permissions %o, expected 0600", name, info.Mode().Perm())
+		}
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected exactly 2 files, got %v", entries)
+	}
+}
+
+func TestSaveEthereumKeyStoreCollisionRefusesOverwrite(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+
+	preexisting := []struct {
+		name  string
+		setup func(t *testing.T, dir string) string
+	}{
+		{
+			name: "json only",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".json")
+				if err := os.WriteFile(path, []byte("existing json"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "pwd only",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".pwd")
+				if err := os.WriteFile(path, []byte("existing pwd"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "json is directory",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".json")
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "pwd is directory",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".pwd")
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "json is symlink",
+			setup: func(t *testing.T, dir string) string {
+				target := filepath.Join(dir, "elsewhere.json")
+				if err := os.WriteFile(target, []byte("data"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, address+".json")
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "pwd is dangling symlink",
+			setup: func(t *testing.T, dir string) string {
+				path := filepath.Join(dir, address+".pwd")
+				if err := os.Symlink(filepath.Join(dir, "missing-target"), path); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+	}
+
+	for _, tt := range preexisting {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			blocker := tt.setup(t, tmpDir)
+			service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+
+			err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), "TestPassword123!", "ethereum", "")
+			if err == nil {
+				t.Fatal("expected collision error, got nil")
+			}
+			if !strings.Contains(err.Error(), "already exists") {
+				t.Fatalf("expected 'already exists' error, got: %v", err)
+			}
+
+			jsonPath := filepath.Join(tmpDir, address+".json")
+			pwdPath := filepath.Join(tmpDir, address+".pwd")
+			other := pwdPath
+			if blocker == pwdPath {
+				other = jsonPath
+			}
+			if _, lerr := os.Lstat(other); lerr == nil {
+				t.Fatalf("companion artifact %s was created despite collision", filepath.Base(other))
+			}
+
+			for name := range dirEntries(t, tmpDir) {
+				if strings.Contains(name, ".keystore-tmp-") {
+					t.Fatalf("temporary file left behind: %s", name)
+				}
+			}
+		})
+	}
+}
+
+func TestSaveMnemonicFileCollisionRefusesOverwrite(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+	mnemonic := "test walk nut penalty hip pave soap entry language right filter choice"
+
+	t.Run("existing mnemonic file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		path := filepath.Join(tmpDir, address+".mnemonic")
+		original := []byte("existing mnemonic")
+		if err := os.WriteFile(path, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+
+		err := service.SaveMnemonicFile(address, mnemonic, "ethereum")
+		if err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("expected collision error, got: %v", err)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(content, original) {
+			t.Fatal("existing mnemonic file was overwritten")
+		}
+	})
+
+	t.Run("mnemonic path is directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(tmpDir, address+".mnemonic"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+		if err := service.SaveMnemonicFile(address, mnemonic, "ethereum"); err == nil {
+			t.Fatal("expected collision error for directory at mnemonic path, got nil")
+		}
+	})
+
+	t.Run("mnemonic path is symlink", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		target := filepath.Join(tmpDir, "victim")
+		if err := os.WriteFile(target, []byte("victim"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(tmpDir, address+".mnemonic")); err != nil {
+			t.Fatal(err)
+		}
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir, KDF: "scrypt"})
+		if err := service.SaveMnemonicFile(address, mnemonic, "ethereum"); err == nil {
+			t.Fatal("expected collision error for symlink at mnemonic path, got nil")
+		}
+		content, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "victim" {
+			t.Fatal("symlink target was modified")
+		}
+	})
+}
+
+func TestWriteNewFileAtomicNoClobber(t *testing.T) {
+	tmpDir := t.TempDir()
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+
+	t.Run("creates new file", func(t *testing.T) {
+		path := filepath.Join(tmpDir, "new.json")
+		if err := service.writeNewFileAtomic(path, []byte("payload"), 0600); err != nil {
+			t.Fatalf("writeNewFileAtomic failed: %v", err)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "payload" {
+			t.Fatalf("unexpected content: %q", content)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("expected 0600 permissions, got %o", info.Mode().Perm())
+		}
+	})
+
+	t.Run("refuses existing file", func(t *testing.T) {
+		path := filepath.Join(tmpDir, "existing.json")
+		if err := os.WriteFile(path, []byte("keep me"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.writeNewFileAtomic(path, []byte("overwrite"), 0600); err == nil {
+			t.Fatal("expected error refusing to replace existing file, got nil")
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "keep me" {
+			t.Fatalf("existing file content changed: %q", content)
+		}
+		for name := range dirEntries(t, tmpDir) {
+			if strings.Contains(name, ".keystore-tmp-") {
+				t.Fatalf("temporary file left behind: %s", name)
+			}
+		}
+	})
+}
+
+func TestCheckMnemonicFileAvailable(t *testing.T) {
+	tmpDir := t.TempDir()
+	service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+
+	if err := service.CheckMnemonicFileAvailable(address, "ethereum"); err != nil {
+		t.Fatalf("expected nil for free path, got: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, address+".mnemonic"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CheckMnemonicFileAvailable(address, "ethereum"); err == nil {
+		t.Fatal("expected collision error, got nil")
+	}
+
+	if err := service.CheckMnemonicFileAvailable("not-an-address", "ethereum"); err == nil {
+		t.Fatal("expected address validation error, got nil")
+	}
+}
+
+func TestGetKeystoreFilePathLegacyFallback(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+
+	t.Run("legacy UTC file found", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+		legacy := "UTC--2025-01-01T00-00-00.000000000Z--" + address + ".json"
+		if err := os.WriteFile(filepath.Join(tmpDir, legacy), []byte(`{}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := service.GetKeystoreFilePath(address)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != legacy {
+			t.Fatalf("expected legacy file %s, got %s", legacy, got)
+		}
+	})
+
+	t.Run("canonical preferred over legacy", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+		canonical := address + ".json"
+		legacy := "UTC--2025-01-01T00-00-00.000000000Z--" + address + ".json"
+		for _, name := range []string{canonical, legacy} {
+			if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(`{}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := service.GetKeystoreFilePath(address)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != canonical {
+			t.Fatalf("expected canonical file %s, got %s", canonical, got)
+		}
+	})
+
+	t.Run("missing directory returns canonical path", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "does-not-exist")
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: missing})
+		got, err := service.GetKeystoreFilePath(address)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(missing, address+".json")
+		if got != want {
+			t.Fatalf("expected %s, got %s", want, got)
+		}
+	})
+
+	t.Run("canonical path that is not a regular file errors", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		service := NewKeyStoreService(KeyStoreConfig{Enabled: true, OutputDirectory: tmpDir})
+		if err := os.Mkdir(filepath.Join(tmpDir, address+".json"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.GetKeystoreFilePath(address); err == nil {
+			t.Fatal("expected error for non-regular canonical path, got nil")
+		}
+	})
+}
+
+type passwordLogTestLogger struct {
+	TestLogger
+	onDebug func(string)
+}
+
+func (l *passwordLogTestLogger) LogDebug(message string) {
+	l.TestLogger.LogDebug(message)
+	if l.onDebug != nil {
+		l.onDebug(message)
+	}
+}
+
+func allLogMessages(l *passwordLogTestLogger) string {
+	var all []string
+	all = append(all, l.InfoMessages...)
+	all = append(all, l.WarningMessages...)
+	all = append(all, l.ErrorMessages...)
+	all = append(all, l.DebugMessages...)
+	return strings.Join(all, "\n")
+}
+
+func assertNoSensitiveLogData(t *testing.T, l *passwordLogTestLogger, sensitive ...string) {
+	t.Helper()
+	joined := allLogMessages(l)
+	for _, s := range sensitive {
+		if s != "" && strings.Contains(joined, s) {
+			t.Errorf("log output leaks sensitive value %q", s)
+		}
+	}
+}
+
+func TestKeyStorePasswordLogging(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+	privateKey := strings.Repeat("0", 63) + "1"
+	fakePassword := "Synthetic-Sidecar-Password42"
+
+	newService := func(t *testing.T, logger *passwordLogTestLogger) (*KeyStoreService, string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		service := NewKeyStoreServiceWithLogger(KeyStoreConfig{
+			Enabled:         true,
+			OutputDirectory: dir,
+			KDF:             "pbkdf2",
+			MaxRetries:      2,
+			RetryDelay:      1,
+		}, logger)
+		return service, filepath.Join(dir, address+".json"), filepath.Join(dir, address+".pwd")
+	}
+
+	t.Run("success", func(t *testing.T) {
+		logger := &passwordLogTestLogger{}
+		service, _, passwordPath := newService(t, logger)
+
+		err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey)
+		if err != nil {
+			t.Fatalf("SaveKeyStoreFilesToDisk failed: %v", err)
+		}
+
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatalf("password file missing: %v", err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("password file contents mismatch")
+		}
+		info, err := os.Stat(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("password file mode %o, expected 0600", info.Mode().Perm())
+		}
+
+		debug := strings.Join(logger.DebugMessages, "\n")
+		if !strings.Contains(debug, "Writing password file") {
+			t.Error("expected 'Writing password file' debug message")
+		}
+		if !strings.Contains(debug, "Password file written successfully") {
+			t.Error("expected 'Password file written successfully' debug message")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+
+	t.Run("existing_sidecar", func(t *testing.T) {
+		logger := &passwordLogTestLogger{}
+		service, keystorePath, passwordPath := newService(t, logger)
+		if err := os.WriteFile(passwordPath, []byte(fakePassword), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		err := service.SaveKeyStoreFilesWithRetry(privateKey, address, "ethereum")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		ksErr, ok := err.(*KeyStoreError)
+		if !ok {
+			t.Fatalf("expected *KeyStoreError, got %T", err)
+		}
+		if ksErr.Component != "existing_file" {
+			t.Fatalf("expected component existing_file, got %s", ksErr.Component)
+		}
+		if ksErr.Recoverable {
+			t.Fatal("expected non-recoverable error")
+		}
+
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("existing sidecar was modified")
+		}
+		if _, err := os.Lstat(keystorePath); !os.IsNotExist(err) {
+			t.Fatal("keystore json unexpectedly present")
+		}
+
+		errs := strings.Join(logger.ErrorMessages, "\n")
+		if !strings.Contains(errs, "Failed to save keystore files") {
+			t.Error("expected 'Failed to save keystore files' error log")
+		}
+		if !strings.Contains(errs, "Non-recoverable") {
+			t.Error("expected 'Non-recoverable' error log")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+
+	t.Run("write_collision", func(t *testing.T) {
+		var sidecar string
+		logger := &passwordLogTestLogger{}
+		logger.onDebug = func(message string) {
+			if strings.HasPrefix(message, "Writing password file") {
+				if err := os.WriteFile(sidecar, []byte(fakePassword), 0600); err != nil {
+					t.Errorf("failed to plant sidecar: %v", err)
+				}
+			}
+		}
+		service, keystorePath, passwordPath := newService(t, logger)
+		sidecar = passwordPath
+
+		err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		ksErr, ok := err.(*KeyStoreError)
+		if !ok {
+			t.Fatalf("expected *KeyStoreError, got %T", err)
+		}
+		if !ksErr.Recoverable {
+			t.Fatal("expected recoverable error")
+		}
+		if ksErr.Component != "password_file" {
+			t.Fatalf("expected component password_file, got %s", ksErr.Component)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected os.ErrExist, got %v", err)
+		}
+
+		if _, err := os.Lstat(keystorePath); !os.IsNotExist(err) {
+			t.Fatal("keystore json was not cleaned up")
+		}
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("existing sidecar was modified")
+		}
+
+		errs := strings.Join(logger.ErrorMessages, "\n")
+		if !strings.Contains(errs, "Failed to write password file") {
+			t.Error("expected 'Failed to write password file' error log")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+
+	t.Run("retry_exhausted", func(t *testing.T) {
+		var sidecar string
+		logger := &passwordLogTestLogger{}
+		logger.onDebug = func(message string) {
+			if strings.HasPrefix(message, "Keystore save attempt ") {
+				if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+					t.Errorf("failed to remove sidecar: %v", err)
+				}
+			}
+			if strings.HasPrefix(message, "Writing password file") {
+				if err := os.WriteFile(sidecar, []byte(fakePassword), 0600); err != nil {
+					t.Errorf("failed to plant sidecar: %v", err)
+				}
+			}
+		}
+		service, keystorePath, passwordPath := newService(t, logger)
+		sidecar = passwordPath
+
+		err := service.SaveKeyStoreFilesWithRetry(privateKey, address, "ethereum")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		ksErr, ok := err.(*KeyStoreError)
+		if !ok {
+			t.Fatalf("expected *KeyStoreError, got %T", err)
+		}
+		if !ksErr.Recoverable {
+			t.Fatal("expected recoverable error")
+		}
+		if ksErr.Component != "password_file" {
+			t.Fatalf("expected component password_file, got %s", ksErr.Component)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected os.ErrExist, got %v", err)
+		}
+
+		warnings := 0
+		for _, m := range logger.WarningMessages {
+			if strings.HasPrefix(m, "Recoverable error") {
+				warnings++
+			}
+		}
+		if warnings != 1 {
+			t.Fatalf("expected exactly 1 recoverable-error warning, got %d", warnings)
+		}
+		errs := strings.Join(logger.ErrorMessages, "\n")
+		if !strings.Contains(errs, "Max retries") {
+			t.Error("expected 'Max retries' error log")
+		}
+		attempts := 0
+		for _, m := range logger.DebugMessages {
+			if strings.HasPrefix(m, "Keystore save attempt ") {
+				attempts++
+			}
+		}
+		if attempts != 2 {
+			t.Fatalf("expected exactly 2 attempt messages, got %d", attempts)
+		}
+		if _, err := os.Lstat(keystorePath); !os.IsNotExist(err) {
+			t.Fatal("keystore json unexpectedly present")
+		}
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("existing sidecar was modified")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+}
+
+func TestSaveWalletFilesToDiskTransaction(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+	privateKey := strings.Repeat("0", 63) + "1"
+	fakePassword := "Synthetic-Sidecar-Password42"
+	fakeMnemonic := "synthetic test mnemonic fixture words only"
+
+	newService := func(t *testing.T) (*KeyStoreService, *passwordLogTestLogger, string) {
+		t.Helper()
+		dir := t.TempDir()
+		logger := &passwordLogTestLogger{}
+		service := NewKeyStoreServiceWithLogger(KeyStoreConfig{
+			Enabled:         true,
+			OutputDirectory: dir,
+			KDF:             "pbkdf2",
+			MaxRetries:      2,
+			RetryDelay:      1,
+		}, logger)
+		return service, logger, dir
+	}
+	noStageLeft := func(t *testing.T, dir string) {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".wallet-stage-") {
+				t.Fatal("stage directory left behind")
+			}
+		}
+	}
+
+	t.Run("preexisting_blockers", func(t *testing.T) {
+		for _, suffix := range []string{".json", ".pwd", ".mnemonic"} {
+			for _, kind := range []string{"file", "dir", "symlink"} {
+				t.Run(suffix+"/"+kind, func(t *testing.T) {
+					service, _, dir := newService(t)
+					blocker := filepath.Join(dir, address+suffix)
+					var verify func(t *testing.T)
+					switch kind {
+					case "file":
+						if err := os.WriteFile(blocker, []byte("sentinel"), 0600); err != nil {
+							t.Fatal(err)
+						}
+						verify = func(t *testing.T) {
+							content, err := os.ReadFile(blocker)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if string(content) != "sentinel" {
+								t.Fatal("existing file modified")
+							}
+						}
+					case "dir":
+						if err := os.Mkdir(blocker, 0700); err != nil {
+							t.Fatal(err)
+						}
+						verify = func(t *testing.T) {
+							info, err := os.Lstat(blocker)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !info.IsDir() {
+								t.Fatal("existing directory modified")
+							}
+						}
+					case "symlink":
+						want := filepath.Join(dir, "does-not-exist")
+						if err := os.Symlink(want, blocker); err != nil {
+							t.Fatal(err)
+						}
+						verify = func(t *testing.T) {
+							got, err := os.Readlink(blocker)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if got != want {
+								t.Fatal("existing symlink modified")
+							}
+						}
+					}
+					err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+					if err == nil {
+						t.Fatal("expected error, got nil")
+					}
+					verify(t)
+					entries, err := os.ReadDir(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, e := range entries {
+						if e.Name() != filepath.Base(blocker) {
+							t.Fatalf("unexpected artifact left behind: %s", e.Name())
+						}
+					}
+				})
+			}
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		service, _, dir := newService(t)
+		fixture := makeTestKeyStore(t, address)
+		err := service.SaveWalletFilesToDisk(address, fixture, fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 3 {
+			t.Fatalf("expected exactly 3 artifacts, got %d", len(entries))
+		}
+		for _, suffix := range []string{".json", ".pwd", ".mnemonic"} {
+			p := filepath.Join(dir, address+suffix)
+			info, serr := os.Stat(p)
+			if serr != nil {
+				t.Fatalf("missing %s", suffix)
+			}
+			if info.Mode().Perm() != 0600 {
+				t.Fatalf("%s mode %o", suffix, info.Mode().Perm())
+			}
+		}
+		pwd, err := os.ReadFile(filepath.Join(dir, address+".pwd"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(pwd) != fakePassword {
+			t.Fatal("password contents mismatch")
+		}
+		mn, err := os.ReadFile(filepath.Join(dir, address+".mnemonic"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(mn) != fakeMnemonic {
+			t.Fatal("mnemonic contents mismatch")
+		}
+		wantJSON, err := fixture.ToJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		js, err := os.ReadFile(filepath.Join(dir, address+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(js) != string(wantJSON) {
+			t.Fatal("keystore json does not match fixture serialization")
+		}
+		noStageLeft(t, dir)
+	})
+
+	t.Run("networks", func(t *testing.T) {
+		for _, tc := range []struct {
+			network  string
+			address  string
+			suffixes []string
+		}{
+			{"ethereum", "0x1234567890abcdef1234567890abcdef12345678", []string{".json", ".pwd", ".mnemonic"}},
+			{"ETHEREUM", "0x1234567890abcdef1234567890abcdef12345678", []string{".json", ".pwd", ".mnemonic"}},
+			{"", "0x1234567890abcdef1234567890abcdef12345678", []string{".json", ".pwd", ".mnemonic"}},
+			{"solana", strings.Repeat("A", 44), []string{".json", ".key", ".mnemonic"}},
+		} {
+			t.Run("network="+tc.network, func(t *testing.T) {
+				service, _, dir := newService(t)
+				err := service.SaveWalletFilesToDisk(tc.address, makeTestKeyStore(t, address), fakePassword, tc.network, privateKey, fakeMnemonic)
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				base := formatAddressForFilename(tc.address, strings.ToLower(tc.network))
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != len(tc.suffixes) {
+					t.Fatalf("expected %d artifacts, got %d", len(tc.suffixes), len(entries))
+				}
+				for _, suffix := range tc.suffixes {
+					p := filepath.Join(dir, base+suffix)
+					info, err := os.Stat(p)
+					if err != nil {
+						t.Fatalf("missing %s: %v", suffix, err)
+					}
+					if info.Mode().Perm() != 0600 {
+						t.Fatalf("%s mode %o", suffix, info.Mode().Perm())
+					}
+				}
+				mn, err := os.ReadFile(filepath.Join(dir, base+".mnemonic"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(mn) != fakeMnemonic {
+					t.Fatal("mnemonic contents mismatch")
+				}
+				noStageLeft(t, dir)
+			})
+		}
+	})
+
+	t.Run("disabled_service", func(t *testing.T) {
+		dir := t.TempDir()
+		service := NewKeyStoreServiceWithLogger(KeyStoreConfig{Enabled: false, OutputDirectory: dir, KDF: "pbkdf2"}, &passwordLogTestLogger{})
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected no artifacts, got %d", len(entries))
+		}
+	})
+
+	t.Run("bitcoin_passthrough", func(t *testing.T) {
+		service, _, dir := newService(t)
+		btcAddress := strings.Repeat("1", 34)
+		err := service.SaveWalletFilesToDisk(btcAddress, nil, fakePassword, "bitcoin", "", fakeMnemonic)
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != btcAddress+".mnemonic" {
+			t.Fatalf("expected only bitcoin mnemonic file, got %v", entries)
+		}
+		mn, err := os.ReadFile(filepath.Join(dir, btcAddress+".mnemonic"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(mn) != fakeMnemonic {
+			t.Fatal("mnemonic contents mismatch")
+		}
+	})
+
+	t.Run("no_mnemonic", func(t *testing.T) {
+		service, _, dir := newService(t)
+		if err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, ""); err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 artifacts without mnemonic, got %d", len(entries))
+		}
+	})
+
+	t.Run("publish_collision_third", func(t *testing.T) {
+		for _, kind := range []string{"file", "dir", "symlink"} {
+			t.Run(kind, func(t *testing.T) {
+				service, logger, dir := newService(t)
+				publishes := 0
+				logger.onDebug = func(message string) {
+					if message == "Publishing wallet artifact" {
+						publishes++
+						if publishes == 3 {
+							target := filepath.Join(dir, address+".mnemonic")
+							var err error
+							switch kind {
+							case "file":
+								err = os.WriteFile(target, []byte("blocker"), 0600)
+							case "dir":
+								err = os.Mkdir(target, 0700)
+							case "symlink":
+								err = os.Symlink(filepath.Join(dir, "nowhere"), target)
+							}
+							if err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+				}
+				err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !errors.Is(err, os.ErrExist) {
+					t.Fatalf("expected os.ErrExist, got %v", err)
+				}
+				for _, suffix := range []string{".json", ".pwd"} {
+					if _, lerr := os.Lstat(filepath.Join(dir, address+suffix)); !os.IsNotExist(lerr) {
+						t.Fatalf("published %s was not rolled back", suffix)
+					}
+				}
+				blocker := filepath.Join(dir, address+".mnemonic")
+				switch kind {
+				case "file":
+					content, rerr := os.ReadFile(blocker)
+					if rerr != nil {
+						t.Fatal(rerr)
+					}
+					if string(content) != "blocker" {
+						t.Fatal("injected blocker modified")
+					}
+				case "dir":
+					info, lerr := os.Lstat(blocker)
+					if lerr != nil {
+						t.Fatal(lerr)
+					}
+					if !info.IsDir() {
+						t.Fatal("injected blocker modified")
+					}
+				case "symlink":
+					target, lerr := os.Readlink(blocker)
+					if lerr != nil {
+						t.Fatal(lerr)
+					}
+					if target != filepath.Join(dir, "nowhere") {
+						t.Fatal("injected blocker modified")
+					}
+				}
+				noStageLeft(t, dir)
+
+				if rerr := os.Remove(blocker); rerr != nil {
+					t.Fatal(rerr)
+				}
+				if err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic); err != nil {
+					t.Fatalf("retry after removing blocker failed: %v", err)
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 3 {
+					t.Fatalf("expected 3 artifacts after retry, got %d", len(entries))
+				}
+				noStageLeft(t, dir)
+			})
+		}
+	})
+
+	t.Run("publish_collision_second_rolls_back_first", func(t *testing.T) {
+		service, logger, dir := newService(t)
+		publishes := 0
+		logger.onDebug = func(message string) {
+			if message == "Publishing wallet artifact" {
+				publishes++
+				if publishes == 2 {
+					if err := os.WriteFile(filepath.Join(dir, address+".pwd"), []byte("blocker"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected os.ErrExist, got %v", err)
+		}
+		if _, lerr := os.Lstat(filepath.Join(dir, address+".json")); !os.IsNotExist(lerr) {
+			t.Fatal("published json was not rolled back")
+		}
+		content, err := os.ReadFile(filepath.Join(dir, address+".pwd"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "blocker" {
+			t.Fatal("injected blocker modified")
+		}
+		if _, lerr := os.Lstat(filepath.Join(dir, address+".mnemonic")); !os.IsNotExist(lerr) {
+			t.Fatal("mnemonic unexpectedly published")
+		}
+		noStageLeft(t, dir)
+	})
+
+	t.Run("staging_failure", func(t *testing.T) {
+		service, logger, dir := newService(t)
+		logger.onDebug = func(message string) {
+			if strings.HasPrefix(message, "Writing mnemonic file: ") {
+				stagePath := strings.TrimPrefix(message, "Writing mnemonic file: ")
+				if err := os.WriteFile(stagePath, []byte("blocker"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		for _, suffix := range []string{".json", ".pwd", ".mnemonic"} {
+			if _, lerr := os.Lstat(filepath.Join(dir, address+suffix)); !os.IsNotExist(lerr) {
+				t.Fatalf("final %s unexpectedly present", suffix)
+			}
+		}
+		noStageLeft(t, dir)
+		assertNoSensitiveLogData(t, logger, fakePassword, fakeMnemonic, privateKey)
+	})
+
+	t.Run("publish_replacement_safety", func(t *testing.T) {
+		service, logger, dir := newService(t)
+		publishes := 0
+		logger.onDebug = func(message string) {
+			if message == "Publishing wallet artifact" {
+				publishes++
+				if publishes == 3 {
+					jsonPath := filepath.Join(dir, address+".json")
+					if err := os.Remove(jsonPath); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(jsonPath, []byte("sentinel"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, address+".mnemonic"), []byte("blocker"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "rollback refused") {
+			t.Fatalf("expected rollback refusal error, got %v", err)
+		}
+		content, err := os.ReadFile(filepath.Join(dir, address+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "sentinel" {
+			t.Fatal("replaced json was removed")
+		}
+		if _, lerr := os.Lstat(filepath.Join(dir, address+".pwd")); !os.IsNotExist(lerr) {
+			t.Fatal("owned pwd was not rolled back")
+		}
+		content, err = os.ReadFile(filepath.Join(dir, address+".mnemonic"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "blocker" {
+			t.Fatal("mnemonic blocker modified")
+		}
+		noStageLeft(t, dir)
+	})
 }

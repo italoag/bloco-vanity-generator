@@ -4,7 +4,11 @@ import (
 	"bloco-vgen/pkg/errors"
 	"crypto/rand"
 	"fmt"
+	"io"
+	"math/big"
 	"strings"
+
+	"github.com/tyler-smith/go-bip39/wordlists"
 )
 
 // PasswordCharset defines the character sets used for password generation
@@ -118,6 +122,46 @@ func (pg *PasswordGenerator) GenerateSecurePassword() (string, error) {
 	}
 
 	return result, nil
+}
+
+func (pg *PasswordGenerator) GenerateWordPassword() (string, error) {
+	return generateWordPassword(rand.Reader)
+}
+
+func generateWordPassword(reader io.Reader) (string, error) {
+	randomIndex := func(limit int64) (int, error) {
+		n, err := rand.Int(reader, big.NewInt(limit))
+		if err != nil {
+			return 0, errors.NewCryptoError("generate_word_password", "failed to read secure entropy", err)
+		}
+		return int(n.Int64()), nil
+	}
+	mask, err := randomIndex(7)
+	if err != nil {
+		return "", err
+	}
+	mask++
+	separator, err := randomIndex(4)
+	if err != nil {
+		return "", err
+	}
+	words := make([]string, 3)
+	for i := range words {
+		index, err := randomIndex(int64(len(wordlists.English)))
+		if err != nil {
+			return "", err
+		}
+		word := wordlists.English[index]
+		words[i] = strings.ToUpper(word[:1]) + word[1:]
+		if mask&(1<<i) != 0 {
+			digit, err := randomIndex(10)
+			if err != nil {
+				return "", err
+			}
+			words[i] += string(byte('0' + digit))
+		}
+	}
+	return strings.Join(words, string("+-_:"[separator])), nil
 }
 
 // setRandomCharFromSet sets a random character from the given set at the specified position

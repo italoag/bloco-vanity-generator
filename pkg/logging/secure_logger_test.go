@@ -1220,3 +1220,39 @@ func TestLogError_SecurityAudit(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeFilePathsCanonicalWalletFilename(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		blocked string
+	}{
+		{"unix_json", "failed /tmp/out/0x1234567890abcdef1234567890abcdef12345678.json now", "1234567890abcdef1234567890abcdef12345678.json"},
+		{"unix_pwd", "failed /tmp/out/0x1234567890abcdef1234567890abcdef12345678.pwd now", "1234567890abcdef1234567890abcdef12345678.pwd"},
+		{"unix_mnemonic", "failed /tmp/out/0x1234567890abcdef1234567890abcdef12345678.mnemonic now", "1234567890abcdef1234567890abcdef12345678.mnemonic"},
+		{"unix_key", "failed /tmp/out/0x1234567890abcdef1234567890abcdef12345678.key now", "1234567890abcdef1234567890abcdef12345678.key"},
+		{"windows_json", `failed C:\wallets\0x1234567890abcdef1234567890abcdef12345678.json now`, "1234567890abcdef1234567890abcdef12345678.json"},
+		{"basename_only", "failed 0x1234567890abcdef1234567890abcdef12345678.pwd now", "1234567890abcdef1234567890abcdef12345678.pwd"},
+		{"checksum_case", "failed /tmp/out/0xAbCdEf1234567890ABCDEF1234567890aBcDeF12.json now", "AbCdEf1234567890ABCDEF1234567890aBcDeF12.json"},
+		{"no_prefix", "failed /tmp/out/1234567890abcdef1234567890abcdef12345678.mnemonic now", "1234567890abcdef1234567890abcdef12345678.mnemonic"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeFilePaths(tc.input)
+			if strings.Contains(got, tc.blocked) {
+				t.Errorf("canonical filename leaked: %s", got)
+			}
+			if !strings.Contains(got, "[KEYSTORE_FILE_REDACTED]") {
+				t.Errorf("expected redaction placeholder: %s", got)
+			}
+		})
+	}
+
+	if got := sanitizeFilePaths("writing /tmp/out/config.json"); !strings.Contains(got, "config.json") {
+		t.Errorf("ordinary config.json must remain: %s", got)
+	}
+	legacy := "UTC--2023-01-01T00-00-00.000000000Z--abcdef1234567890abcdef1234567890abcdef12"
+	if got := sanitizeFilePaths("keystore " + legacy); strings.Contains(got, legacy) {
+		t.Errorf("legacy UTC filename must remain redacted: %s", got)
+	}
+}

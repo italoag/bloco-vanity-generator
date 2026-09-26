@@ -15,47 +15,59 @@ import (
 // project decrypt correctly using go-ethereum's official keystore decoder
 // (the same implementation used by geth, Firefly, and other clients).
 func TestRealKeystoresDecryptWithGeth(t *testing.T) {
-	dir := filepath.Join("..", "..", "keystores")
-	files, err := os.ReadDir(dir)
+	privateKey := "0x6e8d4b6c9f2a1e7d3b5f8c0a4d6e2f1a9b7c5d3e8f0a2b4c6d8e0f1a3b5c7d9e"
+	key, err := ethcrypto.HexToECDSA(strings.TrimPrefix(privateKey, "0x"))
 	if err != nil {
-		t.Skip("no keystores dir:", err)
+		t.Fatal(err)
 	}
-	checked := 0
-	for _, f := range files {
-		if !strings.HasSuffix(f.Name(), ".json") {
-			continue
-		}
-		jsonPath := filepath.Join(dir, f.Name())
-		pwdPath := strings.TrimSuffix(jsonPath, ".json") + ".pwd"
-		pwd, err := os.ReadFile(pwdPath)
-		if err != nil {
-			continue // no password sidecar; skip
-		}
-		data, err := os.ReadFile(jsonPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// 1) Unmarshal with the project struct (validates field names/types)
-		var ks KeyStoreV3
-		if err := json.Unmarshal(data, &ks); err != nil {
-			t.Fatalf("%s: project struct cannot unmarshal: %v", f.Name(), err)
-		}
-		// 2) Decrypt with geth's official key derivation (scrypt/pbkdf2 + MAC)
-		key, err := keystore.DecryptKey(data, string(pwd))
-		if err != nil {
-			t.Fatalf("%s: geth DecryptKey failed: %v", f.Name(), err)
-		}
-		// 3) Verify the derived address matches the keystore address
-		addr := ethcrypto.PubkeyToAddress(key.PrivateKey.PublicKey).Hex()
-		if !strings.EqualFold(strings.TrimPrefix(addr, "0x"), ks.Address) {
-			t.Fatalf("%s: address mismatch: derived %s vs stored %s", f.Name(), addr, ks.Address)
-		}
-		checked++
+	address := ethcrypto.PubkeyToAddress(key.PublicKey).Hex()
+
+	for _, kdf := range []string{"scrypt", "pbkdf2"} {
+		t.Run(kdf, func(t *testing.T) {
+			dir := t.TempDir()
+			service := NewKeyStoreService(KeyStoreConfig{
+				Enabled:         true,
+				OutputDirectory: dir,
+				KDF:             kdf,
+			})
+			if err := service.SaveKeyStoreFiles(privateKey, address, "ethereum"); err != nil {
+				t.Fatalf("SaveKeyStoreFiles failed: %v", err)
+			}
+
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != 2 {
+				t.Fatalf("expected exactly keystore+password files, got %d entries", len(files))
+			}
+			jsonPath := filepath.Join(dir, address+".json")
+			pwdPath := filepath.Join(dir, address+".pwd")
+			pwd, err := os.ReadFile(pwdPath)
+			if err != nil {
+				t.Fatalf("missing password sidecar: %v", err)
+			}
+			data, err := os.ReadFile(jsonPath)
+			if err != nil {
+				t.Fatalf("missing keystore json: %v", err)
+			}
+			// 1) Unmarshal with the project struct (validates field names/types)
+			var ks KeyStoreV3
+			if err := json.Unmarshal(data, &ks); err != nil {
+				t.Fatalf("project struct cannot unmarshal: %v", err)
+			}
+			// 2) Decrypt with geth's official key derivation (scrypt/pbkdf2 + MAC)
+			decrypted, err := keystore.DecryptKey(data, string(pwd))
+			if err != nil {
+				t.Fatalf("geth DecryptKey failed: %v", err)
+			}
+			// 3) Verify the derived address matches the keystore address
+			addr := ethcrypto.PubkeyToAddress(decrypted.PrivateKey.PublicKey).Hex()
+			if !strings.EqualFold(strings.TrimPrefix(addr, "0x"), ks.Address) {
+				t.Fatalf("address mismatch: derived %s vs stored %s", addr, ks.Address)
+			}
+		})
 	}
-	if checked == 0 {
-		t.Skip("no keystore json files found")
-	}
-	t.Logf("validated %d real keystores with go-ethereum official decoder", checked)
 }
 
 // TestGeneratedKeystoreRoundTrip encrypts a fresh key and decrypts it with

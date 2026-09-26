@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.25.13'
+  GO_VERSION: '1.26.8'
 
 permissions:
   contents: read
@@ -21,17 +21,17 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go-version: ['1.25.13']
+        go-version: ['1.26.8']
       fail-fast: false
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7.0.1
       with:
         fetch-depth: 0
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7.0.0
       with:
         go-version: ${{ matrix.go-version }}
         cache: true
@@ -51,7 +51,7 @@ jobs:
     - name: Run go fmt check
       shell: bash
       run: |
-        fmt_output=$(gofmt -s -l $(git ls-files '*.go'))
+        fmt_output=$(git ls-files -z '*.go' | xargs -0 gofmt -s -l)
         if [ -n "$fmt_output" ]; then
           echo "Code is not formatted:"
           echo "$fmt_output"
@@ -65,21 +65,21 @@ jobs:
       run: go test ./internal/crypto -run '^TestKeyStoreServicePerformanceBenchmark$' -count=1 -v -timeout=5m
 
     - name: Generate coverage report
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.8'
       shell: bash
       run: go tool cover -html=coverage.out -o coverage.html
 
     - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
-      uses: codecov/codecov-action@v4
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.8'
+      uses: codecov/codecov-action@v7.1.1
       with:
-        file: ./coverage.out
+        files: ./coverage.out
         flags: unittests
         name: codecov-umbrella
 
     - name: Upload coverage artifacts
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25.13'
-      uses: actions/upload-artifact@v4
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.8'
+      uses: actions/upload-artifact@v7.0.1
       with:
         name: coverage-report
         path: coverage.html
@@ -89,10 +89,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7.0.1
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
         cache: true
@@ -108,10 +108,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7.0.1
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
         cache: true
@@ -122,7 +122,7 @@ jobs:
         args: '-no-fail -fmt sarif -out results.sarif ./...'
 
     - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4.38.0
       with:
         sarif_file: results.sarif
 
@@ -142,12 +142,12 @@ jobs:
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7.0.1
       with:
         fetch-depth: 0
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
         cache: true
@@ -156,9 +156,9 @@ jobs:
       id: version
       run: |
         if [ "${{ github.ref_type }}" = "tag" ]; then
-          echo "VERSION=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          echo "VERSION=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
         else
-          echo "VERSION=$(git describe --tags --always --dirty)" >> $GITHUB_OUTPUT
+          echo "VERSION=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Build binary
@@ -188,7 +188,7 @@ jobs:
         [[ "$output" != *"Build Time: unknown"* ]]
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7.0.1
       with:
         name: bloco-vgen-${{ matrix.goos }}-${{ matrix.goarch }}
         path: dist/*
