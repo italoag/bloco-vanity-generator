@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,7 +238,7 @@ func TestGenerateCommandWithMnemonic(t *testing.T) {
 		}
 		jsonKey := decryptKeystoreArtifact(t, dir, base)
 		mnemonicKey := deriveKeyFromMnemonic(t, strings.TrimSpace(string(mnemonicBytes)))
-		if jsonKey.D.Cmp(mnemonicKey.D) != 0 {
+		if !jsonKey.Equal(mnemonicKey) {
 			t.Fatal("mnemonic-derived private key does not match decrypted keystore key")
 		}
 	}
@@ -352,6 +355,7 @@ func headlessApp(t *testing.T, keystoreDir string, extraOpts ...tea.ProgramOptio
 	cfg := config.DefaultConfig()
 	cfg.KeyStore.Enabled = true
 	cfg.KeyStore.OutputDir = keystoreDir
+	cfg.KeyStore.KDFAlgorithm = "pbkdf2"
 	cfg.TUI.Enabled = true
 	app := NewApplication(cfg, "test", "test", "test")
 	app.tuiProgramOptions = append([]tea.ProgramOption{
@@ -461,7 +465,7 @@ func TestSingleWalletTUISuccessWritesFiles(t *testing.T) {
 		}
 		jsonKey := decryptKeystoreArtifact(t, dir, base)
 		mnemonicKey := deriveKeyFromMnemonic(t, strings.TrimSpace(string(mnemonicBytes)))
-		if jsonKey.D.Cmp(mnemonicKey.D) != 0 {
+		if !jsonKey.Equal(mnemonicKey) {
 			t.Fatal("mnemonic-derived private key does not match decrypted keystore key")
 		}
 	}
@@ -632,5 +636,181 @@ func TestGenerateAndSaveKeystoreMnemonicCollision(t *testing.T) {
 				t.Fatal("existing mnemonic file was overwritten")
 			}
 		}
+	}
+}
+
+func TestDisplayMultipleWalletResultsPasswordLogging(t *testing.T) {
+	sentinel := "Synthetic-Sidecar-Password42"
+
+	for _, verbose := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verbose=%v", verbose), func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := config.DefaultConfig()
+			cfg.CLI.QuietMode = true
+			cfg.CLI.VerboseOutput = verbose
+			cfg.KeyStore.Enabled = true
+			cfg.KeyStore.OutputDir = dir
+			cfg.KeyStore.KDFAlgorithm = "pbkdf2"
+			app := NewApplication(cfg, "test", "test", "test")
+
+			w := newTestWallet(t, false)
+			base := w.Address
+			if !strings.HasPrefix(base, "0x") {
+				base = "0x" + base
+			}
+			sidecar := filepath.Join(dir, base+".pwd")
+			if err := os.WriteFile(sidecar, []byte(sentinel), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			outFile, err := os.CreateTemp(t.TempDir(), "stdout-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = outFile.Close() }()
+			callErr := func() error {
+				oldStdout := os.Stdout
+				os.Stdout = outFile
+				defer func() { os.Stdout = oldStdout }()
+				return app.displayMultipleWalletResults([]*wallet.GenerationResult{
+					{Wallet: w, Attempts: 1, Duration: time.Second},
+				}, 1, time.Second, false)
+			}()
+			if _, err := outFile.Seek(0, 0); err != nil {
+				t.Fatal(err)
+			}
+			outBytes, err := io.ReadAll(outFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := string(outBytes)
+
+			if callErr == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(output, "Keystore: Failed to generate") {
+				t.Error("expected 'Keystore: Failed to generate' in output")
+			}
+			if !strings.Contains(output, "Keystore errors: 1/1") {
+				t.Error("expected 'Keystore errors: 1/1' in output")
+			}
+			for _, s := range []string{sidecar, base + ".pwd", sentinel, w.PrivateKey} {
+				if s != "" && strings.Contains(output, s) {
+					t.Errorf("output leaks sensitive value %q", s)
+				}
+			}
+
+			content, err := os.ReadFile(sidecar)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != sentinel {
+				t.Fatal("existing sidecar was modified")
+			}
+			if _, err := os.Lstat(filepath.Join(dir, base+".json")); !os.IsNotExist(err) {
+				t.Fatal("keystore json unexpectedly present")
+			}
+		})
+	}
+}
+
+func runWalletTUI(t *testing.T, app *Application, multi bool, ctx context.Context, pool *stubWorkerPool) error {
+	t.Helper()
+	return captureOutput(t, func() error {
+		if multi {
+			return app.generateMultipleWalletsTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 1, tui.EngineInfo{Engine: "cpu"})
+		}
+		return app.generateSingleWalletTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
+	})
+}
+
+func TestWalletTUICancellationStopsProgram(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		for _, success := range []bool{false, true} {
+			t.Run(fmt.Sprintf("multi=%v/success=%v", multi, success), func(t *testing.T) {
+				var fired atomic.Bool
+				var watchdog *time.Timer
+				app := headlessApp(t, t.TempDir(), func(p *tea.Program) {
+					watchdog = time.AfterFunc(1500*time.Millisecond, func() {
+						fired.Store(true)
+						p.Kill()
+					})
+				})
+				defer func() {
+					if watchdog != nil {
+						watchdog.Stop()
+					}
+				}()
+				app.config.KeyStore.Enabled = false
+
+				result := stubResult(t, false)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				pool := &stubWorkerPool{
+					stats: worker.NewStatsCollector(),
+					next: func() (*wallet.GenerationResult, error) {
+						cancel()
+						if success {
+							return result, nil
+						}
+						return nil, context.Canceled
+					},
+				}
+
+				err := runWalletTUI(t, app, multi, ctx, pool)
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("expected context cancellation, got %v", err)
+				}
+				if fired.Load() {
+					t.Fatal("TUI ignored caller cancellation until watchdog killed it")
+				}
+				if pool.calls != 1 {
+					t.Fatalf("expected one generation attempt, got %d", pool.calls)
+				}
+			})
+		}
+	}
+}
+
+func TestWalletTUIDeadlineStopsProgram(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multi=%v", multi), func(t *testing.T) {
+			var fired atomic.Bool
+			var watchdog *time.Timer
+			app := headlessApp(t, t.TempDir(), func(p *tea.Program) {
+				watchdog = time.AfterFunc(1500*time.Millisecond, func() {
+					fired.Store(true)
+					p.Kill()
+				})
+			})
+			defer func() {
+				if watchdog != nil {
+					watchdog.Stop()
+				}
+			}()
+			app.config.KeyStore.Enabled = false
+
+			result := stubResult(t, false)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			pool := &stubWorkerPool{
+				stats: worker.NewStatsCollector(),
+				next: func() (*wallet.GenerationResult, error) {
+					<-ctx.Done()
+					return result, nil
+				},
+			}
+
+			err := runWalletTUI(t, app, multi, ctx, pool)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected deadline exceeded, got %v", err)
+			}
+			if fired.Load() {
+				t.Fatal("TUI ignored caller deadline until watchdog killed it")
+			}
+			if pool.calls != 1 {
+				t.Fatalf("expected one generation attempt, got %d", pool.calls)
+			}
+		})
 	}
 }

@@ -289,7 +289,8 @@ func (app *Application) generateSingleWalletTUI(
 	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
-	program := tea.NewProgram(progressModel, app.tuiProgramOptions...)
+	programOptions := append([]tea.ProgramOption{tea.WithContext(ctx)}, app.tuiProgramOptions...)
+	program := tea.NewProgram(progressModel, programOptions...)
 
 	// Channel for wallet results (like in monolithic version)
 	walletResultsChan := make(chan tui.WalletResult, 1)
@@ -448,6 +449,10 @@ func (app *Application) generateSingleWalletTUI(
 	shutdownOnce.Do(func() { close(shutdownChan) })
 	<-generationDone
 
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Check for generation error
 	if genErr != nil {
 		return errors.WrapError(genErr, errors.ErrorTypeGeneration,
@@ -563,7 +568,8 @@ func (app *Application) generateMultipleWalletsTUI(
 	progressModel := tuiManager.CreateProgressModelWithEngine(tuiStats, statsAdapter, engineInfo)
 
 	// Create TUI program (without alt screen for compatibility)
-	program := tea.NewProgram(progressModel, app.tuiProgramOptions...)
+	programOptions := append([]tea.ProgramOption{tea.WithContext(ctx)}, app.tuiProgramOptions...)
+	program := tea.NewProgram(progressModel, programOptions...)
 
 	// Channels for communication (like in monolithic version)
 	walletResultsChan := make(chan tui.WalletResult, count)
@@ -779,6 +785,10 @@ func (app *Application) generateMultipleWalletsTUI(
 	cancelGeneration()
 	shutdownOnce.Do(func() { close(shutdownChan) })
 	<-generationDone
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 
 	// Check for generation error
 	if genErr != nil {
@@ -1793,7 +1803,7 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		if app.config.KeyStore.Enabled {
 			if err := app.generateAndSaveKeystore(result.Wallet); err != nil {
 				keystoreErrors = append(keystoreErrors, err)
-				fmt.Printf("  Keystore: Failed to generate (%v)\n", err)
+				fmt.Printf("  Keystore: Failed to generate\n")
 			} else {
 				fmt.Printf("  Keystore: Saved\n")
 				if result.Wallet.Mnemonic != "" {

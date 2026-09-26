@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/ecies"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -158,9 +159,7 @@ func (cp *CryptoPool) PutBigInt(bigInt *big.Int) {
 func (cp *CryptoPool) GetECDSAKey() *ecdsa.PrivateKey {
 	key := cp.ecdsaKeyPool.Get().(*ecdsa.PrivateKey)
 	// Reset the key
-	key.D = nil
-	key.X = nil
-	key.Y = nil
+	*key = ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: key.Curve}}
 	return key
 }
 
@@ -168,15 +167,18 @@ func (cp *CryptoPool) GetECDSAKey() *ecdsa.PrivateKey {
 func (cp *CryptoPool) PutECDSAKey(key *ecdsa.PrivateKey) {
 	if cp.config.EnableClearing {
 		// Clear sensitive data
-		if key.D != nil {
-			key.D.SetInt64(0)
+		if scalar := ecies.ImportECDSA(key).D; scalar != nil {
+			clear(scalar.Bits())
+			scalar.SetInt64(0)
 		}
+		curve := key.Curve
 		if key.X != nil {
 			key.X.SetInt64(0)
 		}
 		if key.Y != nil {
 			key.Y.SetInt64(0)
 		}
+		*key = ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: curve}}
 	}
 	cp.ecdsaKeyPool.Put(key)
 }

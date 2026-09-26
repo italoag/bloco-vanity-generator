@@ -1262,17 +1262,17 @@ func (ks *KeyStoreService) SaveKeyStoreFilesWithRetry(privateKeyHex, address, ne
 		// Check if error is recoverable
 		if ksErr, ok := err.(*KeyStoreError); ok && ksErr.IsRecoverable() {
 			if attempt < ks.config.MaxRetries {
-				ks.logger.LogWarning(fmt.Sprintf("Recoverable error on attempt %d for address %s: %v. Retrying in %dms...",
-					attempt, address, err, ks.config.RetryDelay))
+				ks.logger.LogWarning(fmt.Sprintf("Recoverable error on attempt %d for address %s. Retrying in %dms...",
+					attempt, address, ks.config.RetryDelay))
 				time.Sleep(time.Duration(ks.config.RetryDelay) * time.Millisecond)
 				continue
 			} else {
-				ks.logger.LogError(fmt.Sprintf("Max retries (%d) exceeded for address %s. Last error: %v",
-					ks.config.MaxRetries, address, err))
+				ks.logger.LogError(fmt.Sprintf("Max retries (%d) exceeded for address %s",
+					ks.config.MaxRetries, address))
 			}
 		} else {
 			// Non-recoverable error, don't retry
-			ks.logger.LogError(fmt.Sprintf("Non-recoverable error for address %s: %v", address, err))
+			ks.logger.LogError(fmt.Sprintf("Non-recoverable error for address %s", address))
 			break
 		}
 	}
@@ -1351,7 +1351,7 @@ func (ks *KeyStoreService) SaveKeyStoreFiles(privateKeyHex, address, network str
 
 	// Save the files
 	if err := ks.SaveKeyStoreFilesToDisk(address, keystore, password, network, privateKeyHex); err != nil {
-		ks.logger.LogError(fmt.Sprintf("Failed to save keystore files for address %s: %v", address, err))
+		ks.logger.LogError(fmt.Sprintf("Failed to save keystore files for address %s", address))
 		return err
 	}
 
@@ -1518,9 +1518,9 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 	ks.logger.LogDebug(fmt.Sprintf("Keystore file written successfully: %s", keystorePath))
 
 	// Write password file atomically with secure permissions (600)
-	ks.logger.LogDebug(fmt.Sprintf("Writing password file: %s", passwordPath))
+	ks.logger.LogDebug("Writing password file")
 	if err := ks.writeNewFileAtomic(passwordPath, []byte(password), 0600); err != nil {
-		ks.logger.LogError(fmt.Sprintf("Failed to write password file %s: %v", passwordPath, err))
+		ks.logger.LogError("Failed to write password file; check disk space, permissions, and existing files")
 		// If password file fails, try to clean up keystore file
 		ks.logger.LogDebug(fmt.Sprintf("Attempting to clean up keystore file: %s", keystorePath))
 		if removeErr := os.Remove(keystorePath); removeErr != nil {
@@ -1533,7 +1533,7 @@ func (ks *KeyStoreService) saveEthereumKeyStore(address string, keystore *KeySto
 		return NewRecoverableKeyStoreError("save", "password_file", err,
 			fmt.Sprintf("Failed to save password file to '%s'. Please check disk space and permissions.", passwordPath))
 	}
-	ks.logger.LogDebug(fmt.Sprintf("Password file written successfully: %s", passwordPath))
+	ks.logger.LogDebug("Password file written successfully")
 
 	// Verify both files were created with correct permissions
 	if err := ks.ValidateFilePermissions(keystorePath, 0600); err != nil {

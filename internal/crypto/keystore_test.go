@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -3227,5 +3228,252 @@ func TestGetKeystoreFilePathLegacyFallback(t *testing.T) {
 		if _, err := service.GetKeystoreFilePath(address); err == nil {
 			t.Fatal("expected error for non-regular canonical path, got nil")
 		}
+	})
+}
+
+type passwordLogTestLogger struct {
+	TestLogger
+	onDebug func(string)
+}
+
+func (l *passwordLogTestLogger) LogDebug(message string) {
+	l.TestLogger.LogDebug(message)
+	if l.onDebug != nil {
+		l.onDebug(message)
+	}
+}
+
+func allLogMessages(l *passwordLogTestLogger) string {
+	var all []string
+	all = append(all, l.InfoMessages...)
+	all = append(all, l.WarningMessages...)
+	all = append(all, l.ErrorMessages...)
+	all = append(all, l.DebugMessages...)
+	return strings.Join(all, "\n")
+}
+
+func assertNoSensitiveLogData(t *testing.T, l *passwordLogTestLogger, sensitive ...string) {
+	t.Helper()
+	joined := allLogMessages(l)
+	for _, s := range sensitive {
+		if s != "" && strings.Contains(joined, s) {
+			t.Errorf("log output leaks sensitive value %q", s)
+		}
+	}
+}
+
+func TestKeyStorePasswordLogging(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+	privateKey := strings.Repeat("0", 63) + "1"
+	fakePassword := "Synthetic-Sidecar-Password42"
+
+	newService := func(t *testing.T, logger *passwordLogTestLogger) (*KeyStoreService, string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		service := NewKeyStoreServiceWithLogger(KeyStoreConfig{
+			Enabled:         true,
+			OutputDirectory: dir,
+			KDF:             "pbkdf2",
+			MaxRetries:      2,
+			RetryDelay:      1,
+		}, logger)
+		return service, filepath.Join(dir, address+".json"), filepath.Join(dir, address+".pwd")
+	}
+
+	t.Run("success", func(t *testing.T) {
+		logger := &passwordLogTestLogger{}
+		service, _, passwordPath := newService(t, logger)
+
+		err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey)
+		if err != nil {
+			t.Fatalf("SaveKeyStoreFilesToDisk failed: %v", err)
+		}
+
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatalf("password file missing: %v", err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("password file contents mismatch")
+		}
+		info, err := os.Stat(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("password file mode %o, expected 0600", info.Mode().Perm())
+		}
+
+		debug := strings.Join(logger.DebugMessages, "\n")
+		if !strings.Contains(debug, "Writing password file") {
+			t.Error("expected 'Writing password file' debug message")
+		}
+		if !strings.Contains(debug, "Password file written successfully") {
+			t.Error("expected 'Password file written successfully' debug message")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+
+	t.Run("existing_sidecar", func(t *testing.T) {
+		logger := &passwordLogTestLogger{}
+		service, keystorePath, passwordPath := newService(t, logger)
+		if err := os.WriteFile(passwordPath, []byte(fakePassword), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		err := service.SaveKeyStoreFilesWithRetry(privateKey, address, "ethereum")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		ksErr, ok := err.(*KeyStoreError)
+		if !ok {
+			t.Fatalf("expected *KeyStoreError, got %T", err)
+		}
+		if ksErr.Component != "existing_file" {
+			t.Fatalf("expected component existing_file, got %s", ksErr.Component)
+		}
+		if ksErr.Recoverable {
+			t.Fatal("expected non-recoverable error")
+		}
+
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("existing sidecar was modified")
+		}
+		if _, err := os.Lstat(keystorePath); !os.IsNotExist(err) {
+			t.Fatal("keystore json unexpectedly present")
+		}
+
+		errs := strings.Join(logger.ErrorMessages, "\n")
+		if !strings.Contains(errs, "Failed to save keystore files") {
+			t.Error("expected 'Failed to save keystore files' error log")
+		}
+		if !strings.Contains(errs, "Non-recoverable") {
+			t.Error("expected 'Non-recoverable' error log")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+
+	t.Run("write_collision", func(t *testing.T) {
+		var sidecar string
+		logger := &passwordLogTestLogger{}
+		logger.onDebug = func(message string) {
+			if strings.HasPrefix(message, "Writing password file") {
+				if err := os.WriteFile(sidecar, []byte(fakePassword), 0600); err != nil {
+					t.Errorf("failed to plant sidecar: %v", err)
+				}
+			}
+		}
+		service, keystorePath, passwordPath := newService(t, logger)
+		sidecar = passwordPath
+
+		err := service.SaveKeyStoreFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		ksErr, ok := err.(*KeyStoreError)
+		if !ok {
+			t.Fatalf("expected *KeyStoreError, got %T", err)
+		}
+		if !ksErr.Recoverable {
+			t.Fatal("expected recoverable error")
+		}
+		if ksErr.Component != "password_file" {
+			t.Fatalf("expected component password_file, got %s", ksErr.Component)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected os.ErrExist, got %v", err)
+		}
+
+		if _, err := os.Lstat(keystorePath); !os.IsNotExist(err) {
+			t.Fatal("keystore json was not cleaned up")
+		}
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("existing sidecar was modified")
+		}
+
+		errs := strings.Join(logger.ErrorMessages, "\n")
+		if !strings.Contains(errs, "Failed to write password file") {
+			t.Error("expected 'Failed to write password file' error log")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+
+	t.Run("retry_exhausted", func(t *testing.T) {
+		var sidecar string
+		logger := &passwordLogTestLogger{}
+		logger.onDebug = func(message string) {
+			if strings.HasPrefix(message, "Keystore save attempt ") {
+				if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+					t.Errorf("failed to remove sidecar: %v", err)
+				}
+			}
+			if strings.HasPrefix(message, "Writing password file") {
+				if err := os.WriteFile(sidecar, []byte(fakePassword), 0600); err != nil {
+					t.Errorf("failed to plant sidecar: %v", err)
+				}
+			}
+		}
+		service, keystorePath, passwordPath := newService(t, logger)
+		sidecar = passwordPath
+
+		err := service.SaveKeyStoreFilesWithRetry(privateKey, address, "ethereum")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		ksErr, ok := err.(*KeyStoreError)
+		if !ok {
+			t.Fatalf("expected *KeyStoreError, got %T", err)
+		}
+		if !ksErr.Recoverable {
+			t.Fatal("expected recoverable error")
+		}
+		if ksErr.Component != "password_file" {
+			t.Fatalf("expected component password_file, got %s", ksErr.Component)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected os.ErrExist, got %v", err)
+		}
+
+		warnings := 0
+		for _, m := range logger.WarningMessages {
+			if strings.HasPrefix(m, "Recoverable error") {
+				warnings++
+			}
+		}
+		if warnings != 1 {
+			t.Fatalf("expected exactly 1 recoverable-error warning, got %d", warnings)
+		}
+		errs := strings.Join(logger.ErrorMessages, "\n")
+		if !strings.Contains(errs, "Max retries") {
+			t.Error("expected 'Max retries' error log")
+		}
+		attempts := 0
+		for _, m := range logger.DebugMessages {
+			if strings.HasPrefix(m, "Keystore save attempt ") {
+				attempts++
+			}
+		}
+		if attempts != 2 {
+			t.Fatalf("expected exactly 2 attempt messages, got %d", attempts)
+		}
+		if _, err := os.Lstat(keystorePath); !os.IsNotExist(err) {
+			t.Fatal("keystore json unexpectedly present")
+		}
+		content, err := os.ReadFile(passwordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != fakePassword {
+			t.Fatal("existing sidecar was modified")
+		}
+		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
 	})
 }

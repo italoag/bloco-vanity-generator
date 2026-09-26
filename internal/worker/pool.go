@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
-	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -412,10 +411,10 @@ func (p *Pool) GenerateWalletWithContext(ctx context.Context, criteria wallet.Ge
 
 					// Found a match: reconstruct the ECDSA private key for the
 					// result (Ethereum only).
-					privateKey = new(ecdsa.PrivateKey)
-					privateKey.Curve = ethcrypto.S256()
-					privateKey.D = new(big.Int).SetBytes(keyBytes[:])
-					privateKey.X, privateKey.Y = ethcrypto.S256().ScalarBaseMult(keyBytes[:])
+					privateKey, err = ethcrypto.ToECDSA(keyBytes[:])
+					if err != nil {
+						continue
+					}
 				}
 
 				// Check if address matches criteria (re-check for mnemonic path, or use result from optimized path)

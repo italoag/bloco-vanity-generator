@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -33,10 +33,10 @@ jobs:
           current_tag=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)
           if [[ -n "$current_tag" ]]; then
             echo "Commit ${GITHUB_SHA} already has version tag $current_tag. Skipping bump."
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "tag=$current_tag" >> $GITHUB_OUTPUT
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$current_tag" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Get last tag
@@ -123,10 +123,12 @@ jobs:
             exit 1
           fi
 
-          echo "version=v${major}.${minor}.${patch}" >> $GITHUB_OUTPUT
-          echo "bump=$bump" >> $GITHUB_OUTPUT
-          echo "source_branch=${src_branch:-direct-main}" >> $GITHUB_OUTPUT
-          echo "reason=$reason" >> $GITHUB_OUTPUT
+          {
+            echo "version=v${major}.${minor}.${patch}"
+            echo "bump=$bump"
+            echo "source_branch=${src_branch:-direct-main}"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create tag
         if: steps.current.outputs.skip != 'true'
