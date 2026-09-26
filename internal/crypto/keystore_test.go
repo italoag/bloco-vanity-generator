@@ -1393,10 +1393,7 @@ func TestKeyStoreService_GenerateKeyStore(t *testing.T) {
 			}
 
 			// Verify password complexity
-			passwordGen := NewPasswordGenerator()
-			if err := passwordGen.ValidatePassword(password); err != nil {
-				t.Errorf("Generated password does not meet complexity requirements: %v", err)
-			}
+			assertWordPasswordFormat(t, password)
 
 			// Verify we can decrypt the private key
 			decryptedKey, err := DecryptPrivateKey(keystore, password)
@@ -3475,5 +3472,448 @@ func TestKeyStorePasswordLogging(t *testing.T) {
 			t.Fatal("existing sidecar was modified")
 		}
 		assertNoSensitiveLogData(t, logger, passwordPath, address+".pwd", fakePassword, privateKey)
+	})
+}
+
+func TestSaveWalletFilesToDiskTransaction(t *testing.T) {
+	address := "0x1234567890abcdef1234567890abcdef12345678"
+	privateKey := strings.Repeat("0", 63) + "1"
+	fakePassword := "Synthetic-Sidecar-Password42"
+	fakeMnemonic := "synthetic test mnemonic fixture words only"
+
+	newService := func(t *testing.T) (*KeyStoreService, *passwordLogTestLogger, string) {
+		t.Helper()
+		dir := t.TempDir()
+		logger := &passwordLogTestLogger{}
+		service := NewKeyStoreServiceWithLogger(KeyStoreConfig{
+			Enabled:         true,
+			OutputDirectory: dir,
+			KDF:             "pbkdf2",
+			MaxRetries:      2,
+			RetryDelay:      1,
+		}, logger)
+		return service, logger, dir
+	}
+	noStageLeft := func(t *testing.T, dir string) {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".wallet-stage-") {
+				t.Fatal("stage directory left behind")
+			}
+		}
+	}
+
+	t.Run("preexisting_blockers", func(t *testing.T) {
+		for _, suffix := range []string{".json", ".pwd", ".mnemonic"} {
+			for _, kind := range []string{"file", "dir", "symlink"} {
+				t.Run(suffix+"/"+kind, func(t *testing.T) {
+					service, _, dir := newService(t)
+					blocker := filepath.Join(dir, address+suffix)
+					var verify func(t *testing.T)
+					switch kind {
+					case "file":
+						if err := os.WriteFile(blocker, []byte("sentinel"), 0600); err != nil {
+							t.Fatal(err)
+						}
+						verify = func(t *testing.T) {
+							content, err := os.ReadFile(blocker)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if string(content) != "sentinel" {
+								t.Fatal("existing file modified")
+							}
+						}
+					case "dir":
+						if err := os.Mkdir(blocker, 0700); err != nil {
+							t.Fatal(err)
+						}
+						verify = func(t *testing.T) {
+							info, err := os.Lstat(blocker)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !info.IsDir() {
+								t.Fatal("existing directory modified")
+							}
+						}
+					case "symlink":
+						want := filepath.Join(dir, "does-not-exist")
+						if err := os.Symlink(want, blocker); err != nil {
+							t.Fatal(err)
+						}
+						verify = func(t *testing.T) {
+							got, err := os.Readlink(blocker)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if got != want {
+								t.Fatal("existing symlink modified")
+							}
+						}
+					}
+					err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+					if err == nil {
+						t.Fatal("expected error, got nil")
+					}
+					verify(t)
+					entries, err := os.ReadDir(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, e := range entries {
+						if e.Name() != filepath.Base(blocker) {
+							t.Fatalf("unexpected artifact left behind: %s", e.Name())
+						}
+					}
+				})
+			}
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		service, _, dir := newService(t)
+		fixture := makeTestKeyStore(t, address)
+		err := service.SaveWalletFilesToDisk(address, fixture, fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 3 {
+			t.Fatalf("expected exactly 3 artifacts, got %d", len(entries))
+		}
+		for _, suffix := range []string{".json", ".pwd", ".mnemonic"} {
+			p := filepath.Join(dir, address+suffix)
+			info, serr := os.Stat(p)
+			if serr != nil {
+				t.Fatalf("missing %s", suffix)
+			}
+			if info.Mode().Perm() != 0600 {
+				t.Fatalf("%s mode %o", suffix, info.Mode().Perm())
+			}
+		}
+		pwd, err := os.ReadFile(filepath.Join(dir, address+".pwd"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(pwd) != fakePassword {
+			t.Fatal("password contents mismatch")
+		}
+		mn, err := os.ReadFile(filepath.Join(dir, address+".mnemonic"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(mn) != fakeMnemonic {
+			t.Fatal("mnemonic contents mismatch")
+		}
+		wantJSON, err := fixture.ToJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		js, err := os.ReadFile(filepath.Join(dir, address+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(js) != string(wantJSON) {
+			t.Fatal("keystore json does not match fixture serialization")
+		}
+		noStageLeft(t, dir)
+	})
+
+	t.Run("networks", func(t *testing.T) {
+		for _, tc := range []struct {
+			network  string
+			address  string
+			suffixes []string
+		}{
+			{"ethereum", "0x1234567890abcdef1234567890abcdef12345678", []string{".json", ".pwd", ".mnemonic"}},
+			{"ETHEREUM", "0x1234567890abcdef1234567890abcdef12345678", []string{".json", ".pwd", ".mnemonic"}},
+			{"", "0x1234567890abcdef1234567890abcdef12345678", []string{".json", ".pwd", ".mnemonic"}},
+			{"solana", strings.Repeat("A", 44), []string{".json", ".key", ".mnemonic"}},
+		} {
+			t.Run("network="+tc.network, func(t *testing.T) {
+				service, _, dir := newService(t)
+				err := service.SaveWalletFilesToDisk(tc.address, makeTestKeyStore(t, address), fakePassword, tc.network, privateKey, fakeMnemonic)
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				base := formatAddressForFilename(tc.address, strings.ToLower(tc.network))
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != len(tc.suffixes) {
+					t.Fatalf("expected %d artifacts, got %d", len(tc.suffixes), len(entries))
+				}
+				for _, suffix := range tc.suffixes {
+					p := filepath.Join(dir, base+suffix)
+					info, err := os.Stat(p)
+					if err != nil {
+						t.Fatalf("missing %s: %v", suffix, err)
+					}
+					if info.Mode().Perm() != 0600 {
+						t.Fatalf("%s mode %o", suffix, info.Mode().Perm())
+					}
+				}
+				mn, err := os.ReadFile(filepath.Join(dir, base+".mnemonic"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(mn) != fakeMnemonic {
+					t.Fatal("mnemonic contents mismatch")
+				}
+				noStageLeft(t, dir)
+			})
+		}
+	})
+
+	t.Run("disabled_service", func(t *testing.T) {
+		dir := t.TempDir()
+		service := NewKeyStoreServiceWithLogger(KeyStoreConfig{Enabled: false, OutputDirectory: dir, KDF: "pbkdf2"}, &passwordLogTestLogger{})
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected no artifacts, got %d", len(entries))
+		}
+	})
+
+	t.Run("bitcoin_passthrough", func(t *testing.T) {
+		service, _, dir := newService(t)
+		btcAddress := strings.Repeat("1", 34)
+		err := service.SaveWalletFilesToDisk(btcAddress, nil, fakePassword, "bitcoin", "", fakeMnemonic)
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != btcAddress+".mnemonic" {
+			t.Fatalf("expected only bitcoin mnemonic file, got %v", entries)
+		}
+		mn, err := os.ReadFile(filepath.Join(dir, btcAddress+".mnemonic"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(mn) != fakeMnemonic {
+			t.Fatal("mnemonic contents mismatch")
+		}
+	})
+
+	t.Run("no_mnemonic", func(t *testing.T) {
+		service, _, dir := newService(t)
+		if err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, ""); err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 artifacts without mnemonic, got %d", len(entries))
+		}
+	})
+
+	t.Run("publish_collision_third", func(t *testing.T) {
+		for _, kind := range []string{"file", "dir", "symlink"} {
+			t.Run(kind, func(t *testing.T) {
+				service, logger, dir := newService(t)
+				publishes := 0
+				logger.onDebug = func(message string) {
+					if message == "Publishing wallet artifact" {
+						publishes++
+						if publishes == 3 {
+							target := filepath.Join(dir, address+".mnemonic")
+							var err error
+							switch kind {
+							case "file":
+								err = os.WriteFile(target, []byte("blocker"), 0600)
+							case "dir":
+								err = os.Mkdir(target, 0700)
+							case "symlink":
+								err = os.Symlink(filepath.Join(dir, "nowhere"), target)
+							}
+							if err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+				}
+				err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !errors.Is(err, os.ErrExist) {
+					t.Fatalf("expected os.ErrExist, got %v", err)
+				}
+				for _, suffix := range []string{".json", ".pwd"} {
+					if _, lerr := os.Lstat(filepath.Join(dir, address+suffix)); !os.IsNotExist(lerr) {
+						t.Fatalf("published %s was not rolled back", suffix)
+					}
+				}
+				blocker := filepath.Join(dir, address+".mnemonic")
+				switch kind {
+				case "file":
+					content, rerr := os.ReadFile(blocker)
+					if rerr != nil {
+						t.Fatal(rerr)
+					}
+					if string(content) != "blocker" {
+						t.Fatal("injected blocker modified")
+					}
+				case "dir":
+					info, lerr := os.Lstat(blocker)
+					if lerr != nil {
+						t.Fatal(lerr)
+					}
+					if !info.IsDir() {
+						t.Fatal("injected blocker modified")
+					}
+				case "symlink":
+					target, lerr := os.Readlink(blocker)
+					if lerr != nil {
+						t.Fatal(lerr)
+					}
+					if target != filepath.Join(dir, "nowhere") {
+						t.Fatal("injected blocker modified")
+					}
+				}
+				noStageLeft(t, dir)
+
+				if rerr := os.Remove(blocker); rerr != nil {
+					t.Fatal(rerr)
+				}
+				if err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic); err != nil {
+					t.Fatalf("retry after removing blocker failed: %v", err)
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 3 {
+					t.Fatalf("expected 3 artifacts after retry, got %d", len(entries))
+				}
+				noStageLeft(t, dir)
+			})
+		}
+	})
+
+	t.Run("publish_collision_second_rolls_back_first", func(t *testing.T) {
+		service, logger, dir := newService(t)
+		publishes := 0
+		logger.onDebug = func(message string) {
+			if message == "Publishing wallet artifact" {
+				publishes++
+				if publishes == 2 {
+					if err := os.WriteFile(filepath.Join(dir, address+".pwd"), []byte("blocker"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected os.ErrExist, got %v", err)
+		}
+		if _, lerr := os.Lstat(filepath.Join(dir, address+".json")); !os.IsNotExist(lerr) {
+			t.Fatal("published json was not rolled back")
+		}
+		content, err := os.ReadFile(filepath.Join(dir, address+".pwd"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "blocker" {
+			t.Fatal("injected blocker modified")
+		}
+		if _, lerr := os.Lstat(filepath.Join(dir, address+".mnemonic")); !os.IsNotExist(lerr) {
+			t.Fatal("mnemonic unexpectedly published")
+		}
+		noStageLeft(t, dir)
+	})
+
+	t.Run("staging_failure", func(t *testing.T) {
+		service, logger, dir := newService(t)
+		logger.onDebug = func(message string) {
+			if strings.HasPrefix(message, "Writing mnemonic file: ") {
+				stagePath := strings.TrimPrefix(message, "Writing mnemonic file: ")
+				if err := os.WriteFile(stagePath, []byte("blocker"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		for _, suffix := range []string{".json", ".pwd", ".mnemonic"} {
+			if _, lerr := os.Lstat(filepath.Join(dir, address+suffix)); !os.IsNotExist(lerr) {
+				t.Fatalf("final %s unexpectedly present", suffix)
+			}
+		}
+		noStageLeft(t, dir)
+		assertNoSensitiveLogData(t, logger, fakePassword, fakeMnemonic, privateKey)
+	})
+
+	t.Run("publish_replacement_safety", func(t *testing.T) {
+		service, logger, dir := newService(t)
+		publishes := 0
+		logger.onDebug = func(message string) {
+			if message == "Publishing wallet artifact" {
+				publishes++
+				if publishes == 3 {
+					jsonPath := filepath.Join(dir, address+".json")
+					if err := os.Remove(jsonPath); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(jsonPath, []byte("sentinel"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, address+".mnemonic"), []byte("blocker"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		err := service.SaveWalletFilesToDisk(address, makeTestKeyStore(t, address), fakePassword, "ethereum", privateKey, fakeMnemonic)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "rollback refused") {
+			t.Fatalf("expected rollback refusal error, got %v", err)
+		}
+		content, err := os.ReadFile(filepath.Join(dir, address+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "sentinel" {
+			t.Fatal("replaced json was removed")
+		}
+		if _, lerr := os.Lstat(filepath.Join(dir, address+".pwd")); !os.IsNotExist(lerr) {
+			t.Fatal("owned pwd was not rolled back")
+		}
+		content, err = os.ReadFile(filepath.Join(dir, address+".mnemonic"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "blocker" {
+			t.Fatal("mnemonic blocker modified")
+		}
+		noStageLeft(t, dir)
 	})
 }

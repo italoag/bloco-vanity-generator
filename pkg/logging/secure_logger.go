@@ -984,7 +984,8 @@ var (
 	passwordURLPattern   = regexp.MustCompile(`(?i)://([^:]+):([^@]+)@`)
 	passwordParamPattern = regexp.MustCompile(`(?i)(password|pwd|pass)=([^&\s]+)`)
 	// UTC keystore filename pattern
-	keystoreFilenamePattern = regexp.MustCompile(`UTC--[0-9T\-:.Z]+--[a-fA-F0-9]+`)
+	keystoreFilenamePattern        = regexp.MustCompile(`UTC--[0-9T\-:.Z]+--[a-fA-F0-9]+`)
+	canonicalWalletFilenamePattern = regexp.MustCompile(`(?i)\b(?:0x)?[a-f0-9]{40}\.(?:json|pwd|mnemonic|key)\b`)
 )
 
 // sanitizeError removes sensitive information from error messages
@@ -1020,6 +1021,7 @@ func sanitizeError(err error) string {
 func sanitizeFilePaths(text string) string {
 	// Replace UTC keystore filenames
 	text = keystoreFilenamePattern.ReplaceAllString(text, "[KEYSTORE_FILE_REDACTED]")
+	text = canonicalWalletFilenamePattern.ReplaceAllString(text, "[KEYSTORE_FILE_REDACTED]")
 
 	// Replace paths containing sensitive directory names
 	text = regexp.MustCompile(`/[^/\s]*/keystore(/[^/\s]*)*`).ReplaceAllString(text, "./[REDACTED]")

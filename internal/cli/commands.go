@@ -432,6 +432,9 @@ func (app *Application) generateSingleWalletTUI(
 		cancelGeneration()
 		shutdownOnce.Do(func() { close(shutdownChan) })
 		<-generationDone
+		if result != nil {
+			app.displayRecoveredWalletResults([]*wallet.GenerationResult{result})
+		}
 		if persistenceErr != nil {
 			return persistenceErr
 		}
@@ -448,6 +451,10 @@ func (app *Application) generateSingleWalletTUI(
 	cancelGeneration()
 	shutdownOnce.Do(func() { close(shutdownChan) })
 	<-generationDone
+
+	if result != nil && (genErr != nil || ctx.Err() != nil) {
+		app.displayRecoveredWalletResults([]*wallet.GenerationResult{result})
+	}
 
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -769,6 +776,7 @@ func (app *Application) generateMultipleWalletsTUI(
 		cancelGeneration()
 		shutdownOnce.Do(func() { close(shutdownChan) })
 		<-generationDone
+		app.displayRecoveredWalletResults(results)
 		if persistenceErr != nil {
 			return persistenceErr
 		}
@@ -785,6 +793,10 @@ func (app *Application) generateMultipleWalletsTUI(
 	cancelGeneration()
 	shutdownOnce.Do(func() { close(shutdownChan) })
 	<-generationDone
+
+	if len(results) > 0 && (genErr != nil || ctx.Err() != nil) {
+		app.displayRecoveredWalletResults(results)
+	}
 
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -1758,6 +1770,22 @@ func (app *Application) displayWalletResult(result *wallet.GenerationResult, sho
 	return nil
 }
 
+func (app *Application) displayRecoveredWalletResults(results []*wallet.GenerationResult) {
+	if len(results) == 0 {
+		return
+	}
+	fmt.Printf("TUI interrupted. Generated wallets are listed below; backup completion is not guaranteed.\n")
+	for _, result := range results {
+		fmt.Printf("Address: %s\n", result.Wallet.Address)
+		if !app.config.CLI.QuietMode {
+			fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
+			if result.Wallet.Mnemonic != "" {
+				fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+			}
+		}
+	}
+}
+
 func (app *Application) displayMultipleWalletResults(results []*wallet.GenerationResult, totalAttempts int64, totalDuration time.Duration, showProgress bool) error {
 	if len(results) == 0 {
 		fmt.Printf("No wallets were generated successfully\n")
@@ -1982,7 +2010,7 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 	}
 
 	// Save the generated keystore
-	if err := keystoreService.SaveKeyStoreFilesToDisk(w.Address, keystore, password, w.Network, w.PrivateKey); err != nil {
+	if err := keystoreService.SaveWalletFilesToDisk(w.Address, keystore, password, w.Network, w.PrivateKey, w.Mnemonic); err != nil {
 		// Check if it's a KeyStoreError for better error reporting
 		if ksErr, ok := err.(*crypto.KeyStoreError); ok {
 			if ksErr.UserMessage != "" {
@@ -1991,18 +2019,6 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 			return fmt.Errorf("keystore generation failed for address %s: %v", w.Address, err)
 		}
 		return fmt.Errorf("failed to save keystore files for address %s: %w", w.Address, err)
-	}
-
-	if w.Mnemonic != "" {
-		if err := keystoreService.SaveMnemonicFile(w.Address, w.Mnemonic, w.Network); err != nil {
-			if ksErr, ok := err.(*crypto.KeyStoreError); ok {
-				if ksErr.UserMessage != "" {
-					return fmt.Errorf("mnemonic save failed: %s", ksErr.UserMessage)
-				}
-				return fmt.Errorf("mnemonic save failed for address %s: %v", w.Address, err)
-			}
-			return fmt.Errorf("failed to save mnemonic file for address %s: %w", w.Address, err)
-		}
 	}
 
 	return nil

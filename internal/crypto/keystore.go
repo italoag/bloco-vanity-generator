@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1474,6 +1475,108 @@ func (ks *KeyStoreService) SaveKeyStoreFilesToDisk(address string, keystore *Key
 	default:
 		return NewKeyStoreError("save", "network", fmt.Errorf("unsupported network: %s", network))
 	}
+}
+
+func (ks *KeyStoreService) SaveWalletFilesToDisk(address string, keystore *KeyStoreV3, password, network, privateKeyHex, mnemonic string) (err error) {
+	network = strings.ToLower(network)
+	if mnemonic == "" {
+		return ks.SaveKeyStoreFilesToDisk(address, keystore, password, network, privateKeyHex)
+	}
+	if !ks.config.Enabled {
+		return NewKeyStoreError("save", "service", fmt.Errorf("keystore generation is disabled"))
+	}
+	if err := validateAddressForNetwork(address, network); err != nil {
+		return NewKeyStoreError("validate", "address", err)
+	}
+	suffixes := []string{".json", ".pwd", ".mnemonic"}
+	switch strings.ToLower(network) {
+	case "ethereum", "":
+	case "solana":
+		suffixes[1] = ".key"
+	case "bitcoin":
+		return ks.SaveMnemonicFile(address, mnemonic, network)
+	default:
+		return NewKeyStoreError("save", "network", fmt.Errorf("unsupported network: %s", network))
+	}
+	if err := ks.ensureOutputDirectory(); err != nil {
+		return err
+	}
+	if err := ks.CheckDirectoryPermissions(); err != nil {
+		return err
+	}
+	base := formatAddressForFilename(address, network)
+	names := make([]string, len(suffixes))
+	for i, suffix := range suffixes {
+		names[i] = base + suffix
+		path := filepath.Join(ks.config.OutputDirectory, names[i])
+		if _, err := os.Lstat(path); err == nil {
+			return NewKeyStoreErrorWithPath("save", "existing_file", path, os.ErrExist)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	stageDir, err := os.MkdirTemp(ks.config.OutputDirectory, ".wallet-stage-*")
+	if err != nil {
+		return err
+	}
+	type publishedFile struct {
+		path string
+		info os.FileInfo
+	}
+	var published []publishedFile
+	defer func() {
+		if err != nil {
+			for i := len(published) - 1; i >= 0; i-- {
+				file := published[i]
+				current, statErr := os.Lstat(file.path)
+				if os.IsNotExist(statErr) {
+					continue
+				}
+				if statErr != nil {
+					err = errors.Join(err, statErr)
+					continue
+				}
+				if !os.SameFile(file.info, current) {
+					err = errors.Join(err, fmt.Errorf("wallet rollback refused to remove a replaced artifact"))
+					continue
+				}
+				if removeErr := os.Remove(file.path); removeErr != nil {
+					err = errors.Join(err, removeErr)
+				}
+			}
+		}
+		if cleanupErr := os.RemoveAll(stageDir); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+	staged := *ks
+	staged.config.OutputDirectory = stageDir
+	if err := staged.SaveKeyStoreFilesToDisk(address, keystore, password, network, privateKeyHex); err != nil {
+		return err
+	}
+	if err := staged.SaveMnemonicFile(address, mnemonic, network); err != nil {
+		return err
+	}
+	for _, name := range names {
+		source := filepath.Join(stageDir, name)
+		target := filepath.Join(ks.config.OutputDirectory, name)
+		info, statErr := os.Lstat(source)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+			return fmt.Errorf("invalid staged wallet artifact permissions or type")
+		}
+		ks.logger.LogDebug("Publishing wallet artifact")
+		if err := os.Link(source, target); err != nil {
+			return NewKeyStoreError("save", "wallet_artifacts", err)
+		}
+		published = append(published, publishedFile{path: target, info: info})
+		if err := ks.ValidateFilePermissions(target, 0600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // saveEthereumKeyStore saves Ethereum KeyStore V3 format files

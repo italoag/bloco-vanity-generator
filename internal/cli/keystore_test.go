@@ -814,3 +814,262 @@ func TestWalletTUIDeadlineStopsProgram(t *testing.T) {
 		})
 	}
 }
+
+func captureStdoutString(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	outFile, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = outFile.Close() }()
+	callErr := func() error {
+		oldStdout := os.Stdout
+		os.Stdout = outFile
+		defer func() { os.Stdout = oldStdout }()
+		return fn()
+	}()
+	if _, err := outFile.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	outBytes, err := io.ReadAll(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(outBytes), callErr
+}
+
+func TestWalletTUIInterruptRecoversResults(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multi=%v", multi), func(t *testing.T) {
+			dir := t.TempDir()
+			var program *tea.Program
+			app := headlessApp(t, dir, func(p *tea.Program) { program = p })
+			app.config.KeyStore.Enabled = false
+
+			result := stubResult(t, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			pool := &stubWorkerPool{
+				stats: worker.NewStatsCollector(),
+				next: func() (*wallet.GenerationResult, error) {
+					program.Kill()
+					return result, nil
+				},
+			}
+
+			output, err := captureStdoutString(t, func() error {
+				if multi {
+					return app.generateMultipleWalletsTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 1, tui.EngineInfo{Engine: "cpu"})
+				}
+				return app.generateSingleWalletTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
+			})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(output, "TUI interrupted") {
+				t.Error("expected interruption warning in output")
+			}
+			for _, want := range []string{result.Wallet.Address, result.Wallet.PrivateKey, result.Wallet.Mnemonic} {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing wallet material: %s", output)
+				}
+			}
+			if pool.calls != 1 {
+				t.Fatalf("expected one generation attempt, got %d", pool.calls)
+			}
+			if files := listArtifacts(t, dir); len(files) != 0 {
+				t.Fatalf("expected no artifacts, got %v", files)
+			}
+		})
+	}
+}
+
+func TestWalletTUIInterruptAfterPersistRecoversResults(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multi=%v", multi), func(t *testing.T) {
+			dir := t.TempDir()
+			var program *tea.Program
+			var snapshotErr error
+			snapshotContents := map[string][]byte{}
+			snapshotInfos := map[string]os.FileInfo{}
+			app := headlessApp(t, dir,
+				func(p *tea.Program) { program = p },
+				tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+					if _, ok := msg.(tui.WalletResultMsg); ok {
+						entries, err := os.ReadDir(dir)
+						if err != nil {
+							snapshotErr = err
+						}
+						for _, entry := range entries {
+							path := filepath.Join(dir, entry.Name())
+							content, err := os.ReadFile(path)
+							if err != nil {
+								snapshotErr = err
+								continue
+							}
+							info, err := os.Lstat(path)
+							if err != nil {
+								snapshotErr = err
+								continue
+							}
+							snapshotContents[entry.Name()] = content
+							snapshotInfos[entry.Name()] = info
+						}
+						program.Kill()
+						return nil
+					}
+					return msg
+				}),
+			)
+
+			result := stubResult(t, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			pool := &stubWorkerPool{
+				stats: worker.NewStatsCollector(),
+				next:  func() (*wallet.GenerationResult, error) { return result, nil },
+			}
+
+			output, err := captureStdoutString(t, func() error {
+				if multi {
+					return app.generateMultipleWalletsTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 1, tui.EngineInfo{Engine: "cpu"})
+				}
+				return app.generateSingleWalletTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
+			})
+			if snapshotErr != nil {
+				t.Fatalf("snapshot in filter failed: %v", snapshotErr)
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "TUI failed after wallet generation") {
+				t.Fatalf("expected TUI failure error, got %v", err)
+			}
+			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "file exists") {
+				t.Fatalf("persistence was attempted a second time: %v", err)
+			}
+			if !strings.Contains(output, "TUI interrupted") {
+				t.Error("expected interruption warning in output")
+			}
+			for _, want := range []string{result.Wallet.Address, result.Wallet.PrivateKey, result.Wallet.Mnemonic} {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing wallet material: %s", output)
+				}
+			}
+
+			if len(snapshotContents) != 3 {
+				t.Fatalf("expected 3 artifacts at interrupt, got %v", snapshotContents)
+			}
+			for name, want := range snapshotContents {
+				path := filepath.Join(dir, name)
+				got, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != string(want) {
+					t.Fatalf("artifact %s bytes changed after interrupt", name)
+				}
+				info, err := os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(snapshotInfos[name], info) {
+					t.Fatalf("artifact %s inode changed after interrupt", name)
+				}
+			}
+			files := listArtifacts(t, dir)
+			addresses := addressFromFiles(files)
+			if len(addresses) != 1 || len(files) != 3 {
+				t.Fatalf("expected exactly one artifact set, got %v", files)
+			}
+			jsonKey := decryptKeystoreArtifact(t, dir, addresses[0])
+			mnemonicKey := deriveKeyFromMnemonic(t, result.Wallet.Mnemonic)
+			if !jsonKey.Equal(mnemonicKey) {
+				t.Fatal("persisted artifacts do not match generated wallet")
+			}
+			if pool.calls != 1 {
+				t.Fatalf("expected one generation attempt, got %d", pool.calls)
+			}
+		})
+	}
+}
+
+func TestWalletTUIPersistenceErrorRecoversResults(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, multi := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multi=%v", multi), func(t *testing.T) {
+			app := headlessApp(t, blocker)
+
+			result := stubResult(t, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			pool := &stubWorkerPool{
+				stats: worker.NewStatsCollector(),
+				next:  func() (*wallet.GenerationResult, error) { return result, nil },
+			}
+
+			output, err := captureStdoutString(t, func() error {
+				if multi {
+					return app.generateMultipleWalletsTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 1, tui.EngineInfo{Engine: "cpu"})
+				}
+				return app.generateSingleWalletTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
+			})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "failed to persist wallet") {
+				t.Fatalf("expected persistence error, got %v", err)
+			}
+			if !strings.Contains(output, "TUI interrupted") {
+				t.Error("expected interruption warning in output")
+			}
+			for _, want := range []string{result.Wallet.Address, result.Wallet.PrivateKey, result.Wallet.Mnemonic} {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing wallet material")
+				}
+			}
+			if pool.calls != 1 {
+				t.Fatalf("expected one generation attempt, got %d", pool.calls)
+			}
+		})
+	}
+}
+
+func TestDisplayRecoveredWalletResultsQuiet(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CLI.QuietMode = true
+	app := NewApplication(cfg, "test", "test", "test")
+	w := newTestWallet(t, true)
+
+	output, err := captureStdoutString(t, func() error {
+		app.displayRecoveredWalletResults([]*wallet.GenerationResult{
+			{Wallet: w, Attempts: 1, Duration: time.Second},
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "TUI interrupted") {
+		t.Error("expected interruption warning")
+	}
+	if !strings.Contains(output, w.Address) {
+		t.Error("expected address in quiet output")
+	}
+	if strings.Contains(output, w.PrivateKey) {
+		t.Error("quiet output leaked private key")
+	}
+	if strings.Contains(output, w.Mnemonic) {
+		t.Error("quiet output leaked mnemonic")
+	}
+
+	if err := captureOutput(t, func() error {
+		app.displayRecoveredWalletResults(nil)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
