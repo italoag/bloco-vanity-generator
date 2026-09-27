@@ -16,10 +16,11 @@ This README reflects the current codebase behavior. Some flags exist in the CLI 
 
 ## Requirements
 
-- Go `1.25.10` or newer.
+- Go `1.26.8` or newer.
 - Git, if building from a clone.
+- For encrypted fnox backups: `fnox` `1.35.2` and `age` `1.2.1` (see [Encrypted backups with fnox](#encrypted-backups-with-fnox)). The repository `mise.toml` pins both, so `mise install` provides them.
 
-CI and Docker currently use Go `1.25.10`.
+CI and Docker currently use Go `1.26.8`.
 
 ## Build and test
 
@@ -97,6 +98,9 @@ Use a custom backup directory:
 | `bloco-vgen stats` | Shows pattern difficulty estimates. |
 | `bloco-vgen benchmark` | Runs the current benchmark command. See [Current limitations](#current-limitations). |
 | `bloco-vgen version` | Prints version, git commit, and build time. |
+| `bloco-vgen backup doctor` | Verifies the fnox backup provider (binary version and encrypt/decrypt roundtrip). |
+| `bloco-vgen backup verify <file>` | Decrypts and validates a `*.fnox.toml` backup artifact; prints public metadata only. |
+| `bloco-vgen backup export <file>` | Writes plaintext wallet files to a new directory. Requires `--output-dir` and `--allow-plaintext`. |
 | `bloco-vgen completion` | Generates shell completion scripts through Cobra. |
 
 Run `./bloco-vgen <command> --help` for the exact flag list exposed by Cobra/Fang.
@@ -139,7 +143,12 @@ Network-specific matching behavior:
 
 ## Backup artifacts
 
-Backup files are enabled by default and written to `./keystores`. Use `--no-keystore` to skip them.
+Two backup stores are available:
+
+- `files` (default): the legacy plaintext layout described below. These artifacts contain secrets.
+- `fnox`: encrypts the entire wallet bundle into a single `*.fnox.toml` artifact per wallet. See [Encrypted backups with fnox](#encrypted-backups-with-fnox).
+
+The `files` store is enabled by default and writes to `./keystores`. Use `--no-keystore` to skip it.
 
 All backup files are written with `0600` permissions through atomic temporary-file writes where implemented.
 
@@ -168,11 +177,124 @@ Example custom KDF parameters:
   --tui=false
 ```
 
+## Encrypted backups with fnox
+
+`--backup-store fnox` encrypts the complete wallet bundle (private key, address, mnemonic when present, and for Ethereum the KeyStore V3 file plus its password) into a single `<network>-<address>.fnox.toml` artifact under `--backup-dir`. This fixes the `files`-mode coverage gaps: a Bitcoin files-mode mnemonic does **not** restore the private key, and the Solana files-mode `.key` is raw plaintext. fnox mode does not migrate existing `files`-mode wallets — it applies to newly generated wallets only.
+
+With fnox selected:
+
+- The private key, mnemonic, and keystore password are never printed; stdout and the TUI carry public metadata plus the confirmed artifact path only (`Encrypted backup confirmed: "<path>"`).
+- No `.pwd`, `.mnemonic`, `.key`, or plaintext keystore JSON files are written.
+- The artifact is `0600`, contains ciphertext plus public metadata, and is only published after an encrypted write and decrypt-verify roundtrip. If encryption fails before ciphertext exists, nothing recoverable is claimed and the address must not be used.
+
+Requirements: `fnox` `1.35.2` and `age` `1.2.1`. The repository `mise.toml` pins both:
+
+```bash
+mise install          # installs fnox 1.35.2 and age 1.2.1
+mise run test-backup  # runs the opt-in integration tests (BLOCO_FNOX_INTEGRATION=1)
+```
+
+See the fnox docs for the [age provider](https://fnox.jdx.dev/providers/age), the [keychain provider](https://fnox.jdx.dev/providers/keychain), and [mise integration](https://fnox.jdx.dev/guide/mise-integration).
+
+### fnox flags
+
+| Flag | Default | Behavior |
+|---|---:|---|
+| `--backup-store` | `files` | `files` or `fnox`. With `fnox`, `--keystore-dir` is rejected (use `--backup-dir`) and `--no-keystore` is invalid. |
+| `--backup-dir` | `./backups` | Directory for encrypted `*.fnox.toml` artifacts. Never overwrites an existing artifact. |
+| `--fnox-bin` | `fnox` | Path to the supported fnox executable (must report `1.35.2`). |
+| `--age-recipient` | none | `age1...` recipient, repeatable for multiple recipients/offline restore keys. Required for generation and `doctor`. |
+| `--age-identity` | `""` | Age identity file used for decryption. Mutually exclusive with `--keychain-service`/`--keychain-account`. |
+| `--keychain-service` | `bloco-vgen` | OS keychain service holding the age identity (macOS Keychain). |
+| `--keychain-account` | `age-identity` | OS keychain account/item name for the identity. |
+| `--backup-timeout` | `30s` | Timeout per fnox invocation. |
+
+### fnox environment variables
+
+| Variable | Effect |
+|---|---|
+| `BLOCO_BACKUP_STORE` | `files` or `fnox`. |
+| `BLOCO_BACKUP_DIR` | Encrypted backup directory. |
+| `BLOCO_FNOX_BINARY` | Path to the fnox executable. |
+| `BLOCO_AGE_RECIPIENTS` | Comma-separated `age1...` recipients. |
+| `BLOCO_AGE_IDENTITY_FILE` | Age identity file path. |
+
+No secret material is accepted through environment variables.
+
+### Generating with encrypted backups
+
+Set the variables to paths you choose (the identity file's parent directory must already exist; `--backup-dir` is created `0700` if missing and an existing directory must not be group/other-accessible):
+
+```bash
+RECIPIENT="age1yourrecipient..."        # from: age-keygen -y "$IDENTITY"
+IDENTITY="/secure/dir/backup-identity.txt"
+BACKUP_DIR="/secure/dir/backups"
+
+go build -o bloco-vgen ./cmd/bloco-vgen
+mise exec -- ./bloco-vgen --backup-store fnox \
+  --backup-dir "$BACKUP_DIR" \
+  --age-recipient "$RECIPIENT" \
+  --age-identity "$IDENTITY" \
+  --with-mnemonic --no-tui
+```
+
+The identity is required at generation time too: each save decrypts what it just wrote to verify the artifact before publishing it. It is not only needed later for `verify`/`export`.
+
+### Identity: file or OS keychain
+
+Decryption needs one age identity. Simplest portable option is an identity file created once, stored outside the repository in a directory you control:
+
+```bash
+age-keygen -o /secure/dir/backup-identity.txt   # prints the secret to the file only
+age-keygen -y /secure/dir/backup-identity.txt   # prints the public age1... recipient
+```
+
+Pass the public recipient via `--age-recipient` at generation time and the identity via `--age-identity` for `verify`/`export`. Keep at least one second recipient or an offline copy of the identity for disaster recovery; losing all identities makes the backups unrecoverable. Do not commit identity files or backups to Git (the repo `.gitignore` excludes `backups/`, `*.fnox.toml`, and `.fnox-pending-*/`).
+
+Alternatively the identity can live in the OS keychain (default service `bloco-vgen`, account `age-identity`). The CLI never provisions or changes keychain items; when `--age-identity` is omitted the backend reads the selected keychain item through fnox, and the OS may prompt for access. Bootstrapping is a manual step you perform yourself. Example bootstrap:
+
+```toml
+# bootstrap.toml (you create this file in a location you choose)
+[providers.wallet_keychain]
+type = "keychain"
+service = "bloco-vgen"
+```
+
+```bash
+fnox --config /absolute/bootstrap.toml set AGE_IDENTITY \
+  --provider wallet_keychain --key-name age-identity \
+  --from-file /absolute/private-identity.txt
+```
+
+The keychain path is not covered by automated tests; treat the bootstrap as a manual acceptance step and verify it with `bloco-vgen backup doctor` before generating wallets.
+
+### Verifying and exporting backups
+
+`backup doctor` also checks that `--backup-dir` exists or can be created (`0700`), is not a symlink, has no group/other permissions, and is writable — no chmod is applied to existing directories.
+
+```bash
+RECIPIENT="age1yourrecipient..."
+IDENTITY="/secure/dir/backup-identity.txt"
+BACKUP_FILE="/absolute/path/to/your-wallet.fnox.toml"   # replace with your artifact path
+NEW_EXPORT_DIR="/secure/dir/new-export"                  # must not exist yet; its parent must exist
+
+./bloco-vgen backup doctor --age-recipient "$RECIPIENT" --age-identity "$IDENTITY"
+./bloco-vgen backup verify "$BACKUP_FILE" --age-identity "$IDENTITY"
+./bloco-vgen backup export "$BACKUP_FILE" \
+  --output-dir "$NEW_EXPORT_DIR" --allow-plaintext \
+  --age-identity "$IDENTITY"
+```
+
+- `backup verify` prints only network/address/ID and a Bitcoin warning when the stored mnemonic has role `unrelated` (it cannot restore the key).
+- `backup export` refuses to run without `--allow-plaintext` and requires `--output-dir` to be a new directory that does not exist (its parent must exist). The export writes plaintext secrets: `wallet-backup.json` contains the complete decrypted bundle (private key, mnemonic, keystore password), plus the network-specific files (Ethereum keystore JSON, `.pwd`, and optional `.mnemonic`; Bitcoin `<address>.key`; Solana `<address>.json` + `.key`). Protect or delete the directory after use. The exported Ethereum keystore keeps its generated three-word password, which is a weak human-memorable password: treat the keystore file itself as a secret.
+- If a save is interrupted after ciphertext was written, a `.fnox-pending-*` directory retains the encrypted `backup.fnox.toml`; point `backup verify`/`backup export` at that file to recover.
+- Scope of the no-plaintext guarantee: generation and `verify` never write plaintext secrets, including on failure paths. An explicit `--allow-plaintext` export writes plaintext by design and could leave files behind if the OS prevents cleanup — it reports the error in that case. Encryption at rest is not protection against a compromised process or user session, and zeroization of Go strings is not guaranteed.
+
 ## Logging
 
 Operational logging is enabled by default. The secure logger is designed to avoid logging private keys, public keys, seeds, mnemonics, and keystore passwords.
 
-Important: wallet result output on stdout does print private keys for successful generation paths. Do not run the CLI in shared terminals or redirect stdout to insecure locations unless you intend to store secrets there.
+Important: wallet result output on stdout does print private keys for successful generation paths in the default `files` backup mode (`--backup-store fnox` suppresses them). Do not run the CLI in shared terminals or redirect stdout to insecure locations unless you intend to store secrets there.
 
 | Flag | Default | Behavior |
 |---|---:|---|
@@ -206,6 +328,11 @@ The application loads configuration from these environment variables before pars
 | `BLOCO_LOG_LEVEL` | Logging level. |
 | `BLOCO_LOG_FORMAT` | Logging format. |
 | `BLOCO_LOG_FILE` | Logging output file. |
+| `BLOCO_BACKUP_STORE` | Backup store: `files` or `fnox`. |
+| `BLOCO_BACKUP_DIR` | Directory for encrypted fnox backups. |
+| `BLOCO_FNOX_BINARY` | Path to the fnox executable. |
+| `BLOCO_AGE_RECIPIENTS` | Comma-separated age recipients for backups. |
+| `BLOCO_AGE_IDENTITY_FILE` | Age identity file for backup decryption. |
 | `BLOCO_DEBUG` | Enables additional debug prints/stack traces in several paths. |
 
 ## Stats command
@@ -251,10 +378,10 @@ These are current code behavior, not intended long-term product claims:
 
 ## Security notes
 
-- Treat stdout as sensitive because successful wallet output includes private keys and sometimes mnemonics.
+- Treat stdout as sensitive in the default `files` backup mode, because successful wallet output includes private keys and sometimes mnemonics. With `--backup-store fnox`, output is metadata-only and secrets are confined to the encrypted artifact.
 - Treat `*.pwd`, `*.mnemonic`, and `*.key` files as sensitive secrets.
 - Ethereum keystore filenames preserve the address case currently held by the generated wallet, including EIP-55 mixed case when checksum mode is used.
-- The project currently targets Go `1.25.9+` and `github.com/ethereum/go-ethereum v1.17.0` to avoid known `govulncheck` findings reported against older versions.
+- The project currently targets Go `1.26.8` and `github.com/ethereum/go-ethereum v1.17.0` to avoid known `govulncheck` findings reported against older versions.
 
 ## License
 

@@ -34,6 +34,8 @@ type Application struct {
 	gitCommit         string
 	buildTime         string
 	tuiProgramOptions []tea.ProgramOption
+	backupStore       fnoxBackupStore
+	backupReceipts    sync.Map
 }
 
 // NewApplication creates a new CLI application
@@ -74,6 +76,7 @@ file generation, and secure logging that never exposes sensitive data.`,
 	app.rootCmd.AddCommand(app.createStatsCommand())
 	app.rootCmd.AddCommand(app.createBenchmarkCommand())
 	app.rootCmd.AddCommand(app.createVersionCommand())
+	app.rootCmd.AddCommand(app.createBackupCommand())
 }
 
 // addGlobalFlags adds global flags to the root command
@@ -119,6 +122,15 @@ func (app *Application) addGlobalFlags() {
 	flags.Int64("log-max-size", 10*1024*1024, "Maximum log file size in bytes before rotation")
 	flags.Int("log-max-files", 5, "Maximum number of rotated log files to keep")
 	flags.Int("log-buffer-size", 1000, "Buffer size for async logging")
+
+	flags.String("backup-store", "files", "Backup storage: files or fnox")
+	flags.String("backup-dir", "./backups", "Directory for encrypted fnox backups")
+	flags.String("fnox-bin", "fnox", "Path to the supported fnox executable")
+	flags.StringSlice("age-recipient", nil, "Age public recipient for backups (repeatable)")
+	flags.String("age-identity", "", "Age identity file for decryption (otherwise use OS keychain)")
+	flags.String("keychain-service", "", "OS keychain service (default bloco-vgen)")
+	flags.String("keychain-account", "", "OS keychain account (default age-identity)")
+	flags.Duration("backup-timeout", 30*time.Second, "Timeout per fnox command")
 }
 
 // createWorkerPool creates an optimized worker pool with secure logging
@@ -160,6 +172,15 @@ func (app *Application) generateWallet(cmd *cobra.Command, args []string) error 
 	poolManager := crypto.NewPoolManager(crypto.DefaultPoolConfig())
 	checksumValidator := crypto.NewChecksumValidator(poolManager)
 	validator := validation.NewAddressValidator(checksumValidator)
+
+	if app.config.Backup.Store == "fnox" {
+		if err := app.ensureFnoxStore(); err != nil {
+			return fmt.Errorf("failed to initialize fnox backup store: %w", err)
+		}
+		if err := app.backupStore.Doctor(ctx); err != nil {
+			return fmt.Errorf("fnox backup preflight failed: %w", err)
+		}
+	}
 
 	// Create optimized worker pool using ants
 	workerPool, err := app.createWorkerPool(poolManager, validator, criteria.Network, engineSelection, generationOptions)
@@ -402,7 +423,7 @@ func (app *Application) generateSingleWalletTUI(
 
 		// Generate and save keystore files if enabled (silent mode for TUI)
 		if app.config.KeyStore.Enabled {
-			if err := app.generateAndSaveKeystoreWithVerbose(genResult.Wallet, false); err != nil {
+			if err := app.generateAndSaveKeystoreContext(generationCtx, genResult.Wallet, false); err != nil {
 				persistenceErr = fmt.Errorf("failed to persist wallet %s: %w", genResult.Wallet.Address, err)
 				genErr = persistenceErr
 				shutdownOnce.Do(func() { close(shutdownChan) })
@@ -415,7 +436,7 @@ func (app *Application) generateSingleWalletTUI(
 		case walletResultsChan <- tui.WalletResult{
 			Index:      1,
 			Address:    genResult.Wallet.Address,
-			PrivateKey: genResult.Wallet.PrivateKey,
+			PrivateKey: app.displayPrivateKey(genResult.Wallet.PrivateKey),
 			Attempts:   int(genResult.Attempts),
 			Time:       genResult.Duration,
 			Error:      "",
@@ -468,6 +489,7 @@ func (app *Application) generateSingleWalletTUI(
 
 	// Return the result (don't show it again since TUI already showed it)
 	if result != nil {
+		app.displayFnoxBackupResults([]*wallet.GenerationResult{result})
 		return nil // Success, TUI already displayed the result
 	}
 
@@ -738,7 +760,7 @@ func (app *Application) generateMultipleWalletsTUI(
 
 			// Generate and save keystore files if enabled (silent mode for TUI)
 			if app.config.KeyStore.Enabled {
-				if err := app.generateAndSaveKeystoreWithVerbose(result.Wallet, false); err != nil {
+				if err := app.generateAndSaveKeystoreContext(generationCtx, result.Wallet, false); err != nil {
 					persistenceErr = fmt.Errorf("failed to persist wallet %s: %w", result.Wallet.Address, err)
 					genErr = persistenceErr
 					shutdownOnce.Do(func() { close(shutdownChan) })
@@ -756,7 +778,7 @@ func (app *Application) generateMultipleWalletsTUI(
 			case walletResultsChan <- tui.WalletResult{
 				Index:      i + 1,
 				Address:    result.Wallet.Address,
-				PrivateKey: result.Wallet.PrivateKey,
+				PrivateKey: app.displayPrivateKey(result.Wallet.PrivateKey),
 				Attempts:   int(result.Attempts),
 				Time:       result.Duration,
 				Error:      "",
@@ -807,6 +829,8 @@ func (app *Application) generateMultipleWalletsTUI(
 		return errors.WrapError(genErr, errors.ErrorTypeGeneration,
 			"generate_multiple_wallets_tui", "failed to generate wallets")
 	}
+
+	app.displayFnoxBackupResults(results)
 
 	// Return success (TUI already displayed the results)
 	return nil
@@ -1327,8 +1351,65 @@ func (app *Application) parseFlags(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to parse logging configuration: %w", err)
 	}
 
+	if err := app.parseBackupFlags(cmd); err != nil {
+		return err
+	}
+
 	// Validate configuration after updates
 	return app.config.Validate()
+}
+
+func (app *Application) parseBackupFlags(cmd *cobra.Command) error {
+	if cmd.Flags().Changed("backup-store") {
+		if v, err := cmd.Flags().GetString("backup-store"); err == nil {
+			app.config.Backup.Store = v
+		}
+	}
+	if cmd.Flags().Changed("backup-dir") {
+		if v, err := cmd.Flags().GetString("backup-dir"); err == nil {
+			app.config.Backup.OutputDir = v
+		}
+	}
+	if cmd.Flags().Changed("fnox-bin") {
+		if v, err := cmd.Flags().GetString("fnox-bin"); err == nil {
+			app.config.Backup.FnoxBinary = v
+		}
+	}
+	if cmd.Flags().Changed("age-recipient") {
+		if v, err := cmd.Flags().GetStringSlice("age-recipient"); err == nil {
+			app.config.Backup.AgeRecipients = v
+		}
+	}
+	if cmd.Flags().Changed("age-identity") {
+		if v, err := cmd.Flags().GetString("age-identity"); err == nil {
+			app.config.Backup.AgeIdentityFile = v
+		}
+	}
+	if cmd.Flags().Changed("keychain-service") {
+		if v, err := cmd.Flags().GetString("keychain-service"); err == nil {
+			app.config.Backup.KeychainService = v
+		}
+	}
+	if cmd.Flags().Changed("keychain-account") {
+		if v, err := cmd.Flags().GetString("keychain-account"); err == nil {
+			app.config.Backup.KeychainAccount = v
+		}
+	}
+	if cmd.Flags().Changed("backup-timeout") {
+		if v, err := cmd.Flags().GetDuration("backup-timeout"); err == nil {
+			app.config.Backup.Timeout = v
+		}
+	}
+
+	if app.config.Backup.Store == "fnox" {
+		if cmd.Flags().Changed("keystore-dir") {
+			return fmt.Errorf("--keystore-dir cannot be used with --backup-store fnox; use --backup-dir instead")
+		}
+		if cmd.Flags().Changed("no-keystore") && !app.config.KeyStore.Enabled {
+			return fmt.Errorf("--no-keystore cannot be used with --backup-store fnox")
+		}
+	}
+	return nil
 }
 
 // parseLoggingFlags parses logging-related command flags and updates configuration
@@ -1739,9 +1820,11 @@ func formatBool(b bool) string {
 // Placeholder implementations for display functions
 func (app *Application) displayWalletResult(result *wallet.GenerationResult, showProgress bool) error {
 	fmt.Printf("Address: %s\n", result.Wallet.Address)
-	fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
-	if result.Wallet.Mnemonic != "" {
-		fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+	if app.config.Backup.Store != "fnox" {
+		fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
+		if result.Wallet.Mnemonic != "" {
+			fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
+		}
 	}
 	fmt.Printf("Attempts: %s\n", formatLargeNumber(result.Attempts))
 	fmt.Printf("Duration: %v\n", result.Duration)
@@ -1758,11 +1841,20 @@ func (app *Application) displayWalletResult(result *wallet.GenerationResult, sho
 	// Generate keystore if enabled
 	if app.config.KeyStore.Enabled {
 		if err := app.generateAndSaveKeystore(result.Wallet); err != nil {
+			if app.config.Backup.Store == "fnox" {
+				fmt.Printf("Encrypted backup not confirmed: %s (%s)\n", result.Wallet.Address, result.Wallet.Network)
+			}
 			return fmt.Errorf("failed to persist wallet %s: %w", result.Wallet.Address, err)
 		}
-		fmt.Printf("Keystore saved to: %s\n", app.config.KeyStore.OutputDir)
-		if result.Wallet.Mnemonic != "" {
-			fmt.Printf("Mnemonic saved to: %s\n", app.config.KeyStore.OutputDir)
+		if app.config.Backup.Store == "fnox" {
+			if receipt, ok := app.backupReceipt(result.Wallet); ok {
+				fmt.Printf("Encrypted backup confirmed: %q\n", receipt.Path)
+			}
+		} else {
+			fmt.Printf("Keystore saved to: %s\n", app.config.KeyStore.OutputDir)
+			if result.Wallet.Mnemonic != "" {
+				fmt.Printf("Mnemonic saved to: %s\n", app.config.KeyStore.OutputDir)
+			}
 		}
 	}
 
@@ -1777,7 +1869,14 @@ func (app *Application) displayRecoveredWalletResults(results []*wallet.Generati
 	fmt.Printf("TUI interrupted. Generated wallets are listed below; backup completion is not guaranteed.\n")
 	for _, result := range results {
 		fmt.Printf("Address: %s\n", result.Wallet.Address)
-		if !app.config.CLI.QuietMode {
+		if app.config.Backup.Store == "fnox" {
+			fmt.Printf("Network: %s\n", result.Wallet.Network)
+			if receipt, ok := app.backupReceipt(result.Wallet); ok {
+				fmt.Printf("Encrypted backup confirmed: %q\n", receipt.Path)
+			} else {
+				fmt.Printf("Encrypted backup not confirmed\n")
+			}
+		} else if !app.config.CLI.QuietMode {
 			fmt.Printf("Private Key: %s\n", result.Wallet.PrivateKey)
 			if result.Wallet.Mnemonic != "" {
 				fmt.Printf("Mnemonic: %s\n", result.Wallet.Mnemonic)
@@ -1804,7 +1903,7 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		fmt.Printf("  Address: %s\n", result.Wallet.Address)
 
 		// Only show private key if not in quiet mode
-		if !app.config.CLI.QuietMode {
+		if !app.config.CLI.QuietMode && app.config.Backup.Store != "fnox" {
 			fmt.Printf("  Private Key: %s\n", result.Wallet.PrivateKey)
 			if result.Wallet.Mnemonic != "" {
 				fmt.Printf("  Mnemonic: %s\n", result.Wallet.Mnemonic)
@@ -1831,11 +1930,21 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 		if app.config.KeyStore.Enabled {
 			if err := app.generateAndSaveKeystore(result.Wallet); err != nil {
 				keystoreErrors = append(keystoreErrors, err)
-				fmt.Printf("  Keystore: Failed to generate\n")
+				if app.config.Backup.Store == "fnox" {
+					fmt.Printf("  Encrypted backup: not confirmed\n")
+				} else {
+					fmt.Printf("  Keystore: Failed to generate\n")
+				}
 			} else {
-				fmt.Printf("  Keystore: Saved\n")
-				if result.Wallet.Mnemonic != "" {
-					fmt.Printf("  Mnemonic: Saved\n")
+				if app.config.Backup.Store == "fnox" {
+					if receipt, ok := app.backupReceipt(result.Wallet); ok {
+						fmt.Printf("  Encrypted backup confirmed: %q\n", receipt.Path)
+					}
+				} else {
+					fmt.Printf("  Keystore: Saved\n")
+					if result.Wallet.Mnemonic != "" {
+						fmt.Printf("  Mnemonic: Saved\n")
+					}
 				}
 			}
 		}
@@ -1847,10 +1956,18 @@ func (app *Application) displayMultipleWalletResults(results []*wallet.Generatio
 	if app.config.KeyStore.Enabled {
 		successCount := len(results) - len(keystoreErrors)
 		if successCount > 0 {
-			fmt.Printf("Keystores saved: %d/%d to %s\n", successCount, len(results), app.config.KeyStore.OutputDir)
+			if app.config.Backup.Store == "fnox" {
+				fmt.Printf("Encrypted backups confirmed: %d/%d\n", successCount, len(results))
+			} else {
+				fmt.Printf("Keystores saved: %d/%d to %s\n", successCount, len(results), app.config.KeyStore.OutputDir)
+			}
 		}
 		if len(keystoreErrors) > 0 {
-			fmt.Printf("Keystore errors: %d/%d\n", len(keystoreErrors), len(results))
+			if app.config.Backup.Store == "fnox" {
+				fmt.Printf("Encrypted backup errors: %d/%d\n", len(keystoreErrors), len(results))
+			} else {
+				fmt.Printf("Keystore errors: %d/%d\n", len(keystoreErrors), len(results))
+			}
 		}
 	}
 
@@ -1916,6 +2033,18 @@ func (app *Application) generateAndSaveKeystore(w *wallet.Wallet) error {
 // For Bitcoin: only saves mnemonic (no KeyStore V3)
 // For Ethereum and Solana: generates KeyStore V3 or network-specific format
 func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, verbose bool) error {
+	ctx := app.rootCmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return app.generateAndSaveKeystoreContext(ctx, w, verbose)
+}
+
+func (app *Application) generateAndSaveKeystoreContext(ctx context.Context, w *wallet.Wallet, verbose bool) error {
+	if app.config.Backup.Store == "fnox" {
+		return app.saveFnoxWallet(ctx, w)
+	}
+
 	// Bitcoin only saves mnemonic, no KeyStore V3
 	if strings.ToLower(w.Network) == "bitcoin" {
 		if w.Mnemonic == "" {
@@ -1943,38 +2072,10 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 		return nil
 	}
 
-	// For Ethereum and Solana: generate KeyStore V3 or network-specific format
-	// Create Universal KDF service for enhanced compatibility
-	kdfService := kdf.NewUniversalKDFService()
-
-	// Create compatibility analyzer
-	analyzer := kdf.NewKDFCompatibilityAnalyzer(kdfService)
-
-	// Prepare KDF parameters
-	kdfParams := app.config.KeyStore.KDFParams
-	if len(kdfParams) == 0 {
-		// Use default parameters based on security level
-		securityLevel := app.parseSecurityLevel(app.config.KeyStore.SecurityLevel)
-		defaultParams, err := analyzer.GetOptimizedParams(app.config.KeyStore.KDFAlgorithm, securityLevel, 512) // 512MB max memory
-		if err != nil {
-			return fmt.Errorf("failed to get default KDF parameters: %w", err)
-		}
-		kdfParams = defaultParams
+	keystoreService, analyzer, err := app.buildKeyStoreService()
+	if err != nil {
+		return err
 	}
-
-	// Create keystore service configuration with Universal KDF
-	keystoreConfig := crypto.KeyStoreConfig{
-		Enabled:         app.config.KeyStore.Enabled,
-		OutputDirectory: app.config.KeyStore.OutputDir,
-		KDF:             app.config.KeyStore.KDFAlgorithm,
-		KDFParams:       kdfParams,
-		Cipher:          "aes-128-ctr",
-		MaxRetries:      3,
-		RetryDelay:      100, // 100ms
-	}
-
-	// Create keystore service with controlled verbose logging
-	keystoreService := crypto.NewKeyStoreService(keystoreConfig)
 	keystoreService.SetVerboseMode(verbose)
 
 	if w.Mnemonic != "" {
@@ -2022,4 +2123,39 @@ func (app *Application) generateAndSaveKeystoreWithVerbose(w *wallet.Wallet, ver
 	}
 
 	return nil
+}
+
+func (app *Application) buildKeyStoreService() (*crypto.KeyStoreService, *kdf.KDFCompatibilityAnalyzer, error) {
+	// For Ethereum and Solana: generate KeyStore V3 or network-specific format
+	// Create Universal KDF service for enhanced compatibility
+	kdfService := kdf.NewUniversalKDFService()
+
+	// Create compatibility analyzer
+	analyzer := kdf.NewKDFCompatibilityAnalyzer(kdfService)
+
+	// Prepare KDF parameters
+	kdfParams := app.config.KeyStore.KDFParams
+	if len(kdfParams) == 0 {
+		// Use default parameters based on security level
+		securityLevel := app.parseSecurityLevel(app.config.KeyStore.SecurityLevel)
+		defaultParams, err := analyzer.GetOptimizedParams(app.config.KeyStore.KDFAlgorithm, securityLevel, 512) // 512MB max memory
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get default KDF parameters: %w", err)
+		}
+		kdfParams = defaultParams
+	}
+
+	// Create keystore service configuration with Universal KDF
+	keystoreConfig := crypto.KeyStoreConfig{
+		Enabled:         app.config.KeyStore.Enabled,
+		OutputDirectory: app.config.KeyStore.OutputDir,
+		KDF:             app.config.KeyStore.KDFAlgorithm,
+		KDFParams:       kdfParams,
+		Cipher:          "aes-128-ctr",
+		MaxRetries:      3,
+		RetryDelay:      100, // 100ms
+	}
+
+	// Create keystore service with controlled verbose logging
+	return crypto.NewKeyStoreService(keystoreConfig), analyzer, nil
 }

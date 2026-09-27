@@ -9,3 +9,6 @@ keystores/
 .crush/
 /bloco-vgen
 bloco-vgen-*
+backups/
+*.fnox.toml
+.fnox-pending-*/
