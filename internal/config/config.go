@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 	CLI      CLIConfig      `yaml:"cli"`
 	KeyStore KeyStoreConfig `yaml:"keystore"`
 	Logging  LoggingConfig  `yaml:"logging"`
+	Backup   BackupConfig   `yaml:"backup"`
 }
 
 // WorkerConfig contains worker-related configuration
@@ -76,6 +78,17 @@ type LoggingConfig struct {
 	BufferSize  int    `yaml:"buffer_size"`
 }
 
+type BackupConfig struct {
+	Store           string        `yaml:"store"`
+	OutputDir       string        `yaml:"output_dir"`
+	FnoxBinary      string        `yaml:"fnox_binary"`
+	AgeRecipients   []string      `yaml:"age_recipients"`
+	AgeIdentityFile string        `yaml:"age_identity_file"`
+	KeychainService string        `yaml:"keychain_service"`
+	KeychainAccount string        `yaml:"keychain_account"`
+	Timeout         time.Duration `yaml:"timeout"`
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
@@ -124,6 +137,12 @@ func DefaultConfig() *Config {
 			MaxFileSize: 10 * 1024 * 1024, // 10MB
 			MaxFiles:    5,
 			BufferSize:  1000,
+		},
+		Backup: BackupConfig{
+			Store:      "files",
+			OutputDir:  "./backups",
+			FnoxBinary: "fnox",
+			Timeout:    30 * time.Second,
 		},
 	}
 }
@@ -202,6 +221,28 @@ func (c *Config) LoadFromEnvironment() {
 
 	if logFile := os.Getenv("BLOCO_LOG_FILE"); logFile != "" {
 		c.Logging.OutputFile = logFile
+	}
+
+	if store := os.Getenv("BLOCO_BACKUP_STORE"); store != "" {
+		c.Backup.Store = strings.ToLower(strings.TrimSpace(store))
+	}
+	if dir := os.Getenv("BLOCO_BACKUP_DIR"); dir != "" {
+		c.Backup.OutputDir = dir
+	}
+	if bin := os.Getenv("BLOCO_FNOX_BINARY"); bin != "" {
+		c.Backup.FnoxBinary = bin
+	}
+	if recipients := os.Getenv("BLOCO_AGE_RECIPIENTS"); recipients != "" {
+		var list []string
+		for _, r := range strings.Split(recipients, ",") {
+			if trimmed := strings.TrimSpace(r); trimmed != "" {
+				list = append(list, trimmed)
+			}
+		}
+		c.Backup.AgeRecipients = list
+	}
+	if identity := os.Getenv("BLOCO_AGE_IDENTITY_FILE"); identity != "" {
+		c.Backup.AgeIdentityFile = identity
 	}
 }
 
@@ -302,6 +343,25 @@ func (c *Config) Validate() error {
 
 	if c.Logging.BufferSize < 0 {
 		return fmt.Errorf("log buffer size must be non-negative, got %d", c.Logging.BufferSize)
+	}
+
+	switch c.Backup.Store {
+	case "", "files":
+	case "fnox":
+		if !c.KeyStore.Enabled {
+			return fmt.Errorf("backup store fnox requires keystore to be enabled")
+		}
+		if c.Backup.OutputDir == "" {
+			return fmt.Errorf("backup output directory is required for fnox store")
+		}
+		if c.Backup.AgeIdentityFile != "" && (c.Backup.KeychainService != "" || c.Backup.KeychainAccount != "") {
+			return fmt.Errorf("age identity file cannot be combined with keychain service/account")
+		}
+	default:
+		return fmt.Errorf("invalid backup store: %s", c.Backup.Store)
+	}
+	if c.Backup.Timeout < 0 {
+		return fmt.Errorf("backup timeout cannot be negative, got %v", c.Backup.Timeout)
 	}
 
 	return nil

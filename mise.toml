@@ -1,0 +1,7 @@
+[tools]
+fnox = "1.35.2"
+age = "1.2.1"
+
+[tasks.test-backup]
+env = { BLOCO_FNOX_INTEGRATION = "1" }
+run = "go test -race ./internal/backup ./internal/cli -run Fnox -count=1 -timeout=5m"
