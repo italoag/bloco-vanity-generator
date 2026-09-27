@@ -304,13 +304,10 @@ func TestFnoxTUISingleMasksSecrets(t *testing.T) {
 	fake := &fakeFnoxStore{dir: t.TempDir()}
 	var gotMsg *tui.WalletResultMsg
 	app := fnoxHeadlessApp(t, fake,
-		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
-			if m, ok := msg.(tui.WalletResultMsg); ok {
-				captured := m
-				gotMsg = &captured
-			}
-			return msg
-		}),
+		tea.WithFilter(quitAfterWalletResults(1, func(m tui.WalletResultMsg) {
+			captured := m
+			gotMsg = &captured
+		})),
 	)
 
 	result := stubResult(t, true)
@@ -319,8 +316,7 @@ func TestFnoxTUISingleMasksSecrets(t *testing.T) {
 		next:  func() (*wallet.GenerationResult, error) { return result, nil },
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	stdout, stderr, err := captureStdStreams(t, func() error {
 		return app.generateSingleWalletTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
 	})
@@ -352,12 +348,9 @@ func TestFnoxTUIMultiMasksSecrets(t *testing.T) {
 	fake := &fakeFnoxStore{dir: t.TempDir()}
 	var captured []tui.WalletResultMsg
 	app := fnoxHeadlessApp(t, fake,
-		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
-			if m, ok := msg.(tui.WalletResultMsg); ok {
-				captured = append(captured, m)
-			}
-			return msg
-		}),
+		tea.WithFilter(quitAfterWalletResults(2, func(m tui.WalletResultMsg) {
+			captured = append(captured, m)
+		})),
 	)
 
 	results := []*wallet.GenerationResult{stubResult(t, true), stubResult(t, false)}
@@ -371,8 +364,7 @@ func TestFnoxTUIMultiMasksSecrets(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	stdout, stderr, err := captureStdStreams(t, func() error {
 		return app.generateMultipleWalletsTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 2, tui.EngineInfo{Engine: "cpu"})
 	})
