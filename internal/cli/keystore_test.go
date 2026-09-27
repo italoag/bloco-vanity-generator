@@ -367,6 +367,94 @@ func headlessApp(t *testing.T, keystoreDir string, extraOpts ...tea.ProgramOptio
 	return app
 }
 
+func quitAfterWalletResults(expected int, capture func(tui.WalletResultMsg)) func(tea.Model, tea.Msg) tea.Msg {
+	received := 0
+	return func(_ tea.Model, msg tea.Msg) tea.Msg {
+		switch m := msg.(type) {
+		case tui.WalletResultMsg:
+			received++
+			if capture != nil {
+				capture(m)
+			}
+		case tui.ProgressMsg:
+			if received == expected && m.IsComplete {
+				return tea.QuitMsg{}
+			}
+		}
+		return msg
+	}
+}
+
+func TestQuitAfterWalletResults(t *testing.T) {
+	walletMsg := func(index int) tui.WalletResultMsg {
+		return tui.WalletResultMsg{Result: tui.WalletResult{
+			Index:      index,
+			Address:    "0xabc",
+			PrivateKey: "[encrypted backup]",
+			Attempts:   1,
+			Error:      "",
+		}}
+	}
+	complete := tui.ProgressMsg{IsComplete: true}
+	incomplete := tui.ProgressMsg{IsComplete: false, CompletedWallets: 2, TotalWallets: 2}
+
+	var captured []tui.WalletResultMsg
+	filter := quitAfterWalletResults(2, func(m tui.WalletResultMsg) { captured = append(captured, m) })
+
+	if got := filter(nil, complete); got != complete {
+		t.Fatalf("completion before results must not quit, got %T", got)
+	}
+	w1 := walletMsg(1)
+	if got := filter(nil, w1); got != w1 {
+		t.Fatalf("wallet result must pass through, got %T", got)
+	}
+	if len(captured) != 1 || captured[0].Result.Index != 1 {
+		t.Fatalf("capture did not record first result: %+v", captured)
+	}
+	if got := filter(nil, complete); got != complete {
+		t.Fatalf("completion after 1 of 2 results must not quit, got %T", got)
+	}
+	w2 := walletMsg(2)
+	if got := filter(nil, w2); got != w2 {
+		t.Fatalf("wallet result must pass through, got %T", got)
+	}
+	if len(captured) != 2 || captured[1].Result.Index != 2 {
+		t.Fatalf("capture did not record second result: %+v", captured)
+	}
+	if captured[0].Result.Address != "0xabc" || captured[0].Result.PrivateKey != "[encrypted backup]" {
+		t.Fatal("captured message fields not preserved")
+	}
+	if got := filter(nil, incomplete); got != incomplete {
+		t.Fatalf("incomplete progress must not quit, got %T", got)
+	}
+	got := filter(nil, complete)
+	if _, ok := got.(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", got)
+	}
+
+	var captureCount int
+	single := quitAfterWalletResults(1, func(m tui.WalletResultMsg) { captureCount++ })
+	if got := single(nil, walletMsg(1)); got != walletMsg(1) {
+		t.Fatalf("wallet result must pass through, got %T", got)
+	}
+	if captureCount != 1 {
+		t.Fatalf("capture invoked %d times", captureCount)
+	}
+	got = single(nil, complete)
+	if _, ok := got.(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", got)
+	}
+
+	nilCapture := quitAfterWalletResults(1, nil)
+	if got := nilCapture(nil, walletMsg(1)); got != walletMsg(1) {
+		t.Fatalf("wallet result must pass through, got %T", got)
+	}
+	got = nilCapture(nil, complete)
+	if _, ok := got.(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg with nil capture, got %T", got)
+	}
+}
+
 func stubResult(t *testing.T, withMnemonic bool) *wallet.GenerationResult {
 	t.Helper()
 	return &wallet.GenerationResult{
@@ -436,15 +524,14 @@ func TestMultipleWalletsTUIPersistenceErrorPropagates(t *testing.T) {
 
 func TestSingleWalletTUISuccessWritesFiles(t *testing.T) {
 	dir := t.TempDir()
-	app := headlessApp(t, dir)
+	app := headlessApp(t, dir, tea.WithFilter(quitAfterWalletResults(1, nil)))
 
 	pool := &stubWorkerPool{
 		stats: worker.NewStatsCollector(),
 		next:  func() (*wallet.GenerationResult, error) { return stubResult(t, true), nil },
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 
 	err := captureOutput(t, func() error {
 		return app.generateSingleWalletTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
@@ -473,15 +560,14 @@ func TestSingleWalletTUISuccessWritesFiles(t *testing.T) {
 
 func TestMultipleWalletsTUISuccessWritesFiles(t *testing.T) {
 	dir := t.TempDir()
-	app := headlessApp(t, dir)
+	app := headlessApp(t, dir, tea.WithFilter(quitAfterWalletResults(2, nil)))
 
 	pool := &stubWorkerPool{
 		stats: worker.NewStatsCollector(),
 		next:  func() (*wallet.GenerationResult, error) { return stubResult(t, false), nil },
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 
 	err := captureOutput(t, func() error {
 		return app.generateMultipleWalletsTUI(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 2, tui.EngineInfo{Engine: "cpu"})
