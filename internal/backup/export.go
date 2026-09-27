@@ -14,6 +14,28 @@ import (
 	"bloco-vgen/internal/crypto"
 )
 
+func writeExportFile(path string, data []byte) error {
+	return writeExportFileWith(path, data, writeSyncClose, os.Link)
+}
+
+func writeExportFileWith(path string, data []byte, write func(*os.File, []byte) error, publish func(string, string) error) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".export-tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
+	if err := f.Chmod(0600); err != nil {
+		return err
+	}
+	if err := write(f, data); err != nil {
+		return err
+	}
+	if err := publish(f.Name(), path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
 func Export(ctx context.Context, b *Bundle, outputDir string) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -65,7 +87,7 @@ func Export(ctx context.Context, b *Bundle, outputDir string) (err error) {
 		err = fmt.Errorf("bundle too large")
 		return err
 	}
-	if err = writeFileSync(filepath.Join(outputDir, "wallet-backup.json"), payload); err != nil {
+	if err = writeExportFile(filepath.Join(outputDir, "wallet-backup.json"), payload); err != nil {
 		err = fmt.Errorf("export write failed")
 		return err
 	}
@@ -98,7 +120,7 @@ func Export(ctx context.Context, b *Bundle, outputDir string) (err error) {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if err = writeFileSync(filepath.Join(outputDir, b.Address+".key"), []byte(b.PrivateKey)); err != nil {
+		if err = writeExportFile(filepath.Join(outputDir, b.Address+".key"), []byte(b.PrivateKey)); err != nil {
 			err = fmt.Errorf("export write failed")
 			return err
 		}
@@ -116,7 +138,7 @@ func Export(ctx context.Context, b *Bundle, outputDir string) (err error) {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if err = writeFileSync(filepath.Join(outputDir, b.Address+".json"), keyJSON); err != nil {
+		if err = writeExportFile(filepath.Join(outputDir, b.Address+".json"), keyJSON); err != nil {
 			clear(keyJSON)
 			err = fmt.Errorf("export write failed")
 			return err
@@ -125,7 +147,7 @@ func Export(ctx context.Context, b *Bundle, outputDir string) (err error) {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if err = writeFileSync(filepath.Join(outputDir, b.Address+".key"), []byte(b.PrivateKey)); err != nil {
+		if err = writeExportFile(filepath.Join(outputDir, b.Address+".key"), []byte(b.PrivateKey)); err != nil {
 			err = fmt.Errorf("export write failed")
 			return err
 		}

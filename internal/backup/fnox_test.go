@@ -767,3 +767,309 @@ func TestStoreDoctorOutputDirProbe(t *testing.T) {
 		}
 	})
 }
+
+func TestStoreSavePublicationRollback(t *testing.T) {
+	makeStore := func(t *testing.T, dir string, runner *fakeRunner) *Store {
+		t.Helper()
+		return newTestStore(t, dir, runner)
+	}
+
+	t.Run("sync_failure_rolls_back_and_retry_succeeds", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := makeStore(t, outDir, runner)
+		outSyncs := 0
+		store.publication = &publicationOps{
+			syncDir: func(dir string) error {
+				if dir == outDir {
+					outSyncs++
+					if outSyncs == 1 {
+						return fmt.Errorf("injected sync failure")
+					}
+				}
+				return syncDir(dir)
+			},
+		}
+		b := ethereumBundle(t, false)
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if pe.FinalPath != "" {
+			t.Fatal("clean rollback must not set FinalPath")
+		}
+		final := filepath.Join(outDir, b.Filename())
+		if _, err := os.Lstat(final); !os.IsNotExist(err) {
+			t.Fatal("final must be rolled back")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatalf("pending artifact missing: %v", err)
+		}
+		if _, err := store.Load(context.Background(), pe.Path); err != nil {
+			t.Fatalf("pending artifact not loadable: %v", err)
+		}
+		retry := makeStore(t, outDir, runner)
+		if _, err := retry.Save(context.Background(), b); err != nil {
+			t.Fatalf("retry after rollback must succeed: %v", err)
+		}
+	})
+
+	t.Run("postlink_lstat_failure_rolls_back", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := makeStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		finalStats := 0
+		store.publication = &publicationOps{
+			lstat: func(path string) (os.FileInfo, error) {
+				if path == final {
+					finalStats++
+					if finalStats == 1 {
+						return nil, fmt.Errorf("injected lstat failure")
+					}
+				}
+				return os.Lstat(path)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if pe.FinalPath != "" {
+			t.Fatal("clean rollback must not set FinalPath")
+		}
+		if _, err := os.Lstat(final); !os.IsNotExist(err) {
+			t.Fatal("final must be rolled back")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatalf("pending artifact missing: %v", err)
+		}
+	})
+
+	t.Run("replaced_final_preserved_and_marked", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := makeStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		store.publication = &publicationOps{
+			link: func(src, dst string) error {
+				if err := os.Link(src, dst); err != nil {
+					return err
+				}
+				if err := os.Remove(dst); err != nil {
+					return err
+				}
+				return os.WriteFile(dst, []byte("unrelated sentinel"), 0600)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed cleanup")
+		}
+		if !errors.Is(err, errPublicationRollback) {
+			t.Fatal("rollback marker missing")
+		}
+		if !strings.Contains(pe.Error(), "final-link cleanup was not confirmed") {
+			t.Fatalf("missing cleanup warning: %s", pe.Error())
+		}
+		content, err := os.ReadFile(final)
+		if err != nil || string(content) != "unrelated sentinel" {
+			t.Fatal("unrelated final must be preserved")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatalf("pending artifact missing: %v", err)
+		}
+	})
+
+	t.Run("remove_failure_keeps_both_paths", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := makeStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		lstatCalls := 0
+		store.publication = &publicationOps{
+			lstat: func(path string) (os.FileInfo, error) {
+				if path == final {
+					lstatCalls++
+					if lstatCalls == 1 {
+						return nil, fmt.Errorf("injected lstat failure")
+					}
+				}
+				return os.Lstat(path)
+			},
+			remove: func(string) error {
+				return os.ErrPermission
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationRollback) {
+			t.Fatal("rollback marker missing")
+		}
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed cleanup")
+		}
+		if _, err := os.Lstat(final); err != nil {
+			t.Fatal("final must remain when removal fails")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatal("pending must remain when removal fails")
+		}
+	})
+
+	t.Run("missing_source_preserves_sole_final", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := makeStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		var stagedPath string
+		store.publication = &publicationOps{
+			link: func(src, dst string) error {
+				stagedPath = src
+				return os.Link(src, dst)
+			},
+			syncDir: func(dir string) error {
+				if dir == outDir {
+					if stagedPath != "" {
+						if rerr := os.Remove(stagedPath); rerr != nil {
+							t.Errorf("staged removal fixture: %v", rerr)
+						}
+					}
+					return fmt.Errorf("injected sync failure")
+				}
+				return syncDir(dir)
+			},
+			remove: func(string) error {
+				t.Error("remove must not run when source is gone")
+				return nil
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationRollback) {
+			t.Fatal("rollback marker missing")
+		}
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed cleanup")
+		}
+		if _, err := os.Lstat(final); err != nil {
+			t.Fatal("sole final copy must be preserved")
+		}
+	})
+
+	t.Run("link_failure_never_touches_existing", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := makeStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		if err := os.WriteFile(final, []byte("competitor"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := store.Save(context.Background(), b)
+		if err == nil || !strings.Contains(err.Error(), "exists") {
+			t.Fatalf("expected ErrExist-style failure, got %v", err)
+		}
+		content, err := os.ReadFile(final)
+		if err != nil {
+			t.Fatalf("read final: %v", err)
+		}
+		if string(content) != "competitor" {
+			t.Fatal("existing target must be preserved")
+		}
+
+		outDir2 := t.TempDir()
+		store2 := makeStore(t, outDir2, runner)
+		store2.publication = &publicationOps{
+			link: func(string, string) error {
+				return os.ErrExist
+			},
+			remove: func(string) error {
+				t.Error("remove must not run when link failed")
+				return nil
+			},
+		}
+		_, err = store2.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if pe.FinalPath != "" {
+			t.Fatal("no rollback expected when link failed")
+		}
+	})
+}
+
+func TestPrepareOutputDirNestedUnderPublicParent(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentMode := info.Mode().Perm()
+	if parentMode != 0755 {
+		t.Fatalf("fixture parent mode %v, want 0755", parentMode)
+	}
+
+	leaf := filepath.Join(parent, "intermediate", "leaf")
+	if err := (&Store{outputDir: leaf}).prepareOutputDir(); err != nil {
+		t.Fatalf("prepareOutputDir: %v", err)
+	}
+	for _, dir := range []string{filepath.Join(parent, "intermediate"), leaf} {
+		fi, err := os.Lstat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fi.IsDir() || fi.Mode().Perm() != 0700 {
+			t.Fatalf("created dir %s mode %v, want 0700 dir", dir, fi.Mode())
+		}
+	}
+	fi, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != parentMode {
+		t.Fatalf("parent mode changed: %v -> %v", parentMode, fi.Mode().Perm())
+	}
+	if err := (&Store{outputDir: leaf}).prepareOutputDir(); err != nil {
+		t.Fatalf("second call must pass: %v", err)
+	}
+
+	broad := filepath.Join(parent, "broad")
+	if err := os.Mkdir(broad, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(broad, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Store{outputDir: broad}).prepareOutputDir(); err == nil {
+		t.Fatal("existing broad leaf must still be rejected")
+	}
+
+	link := filepath.Join(parent, "linkleaf")
+	if err := os.Symlink(leaf, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Store{outputDir: link}).prepareOutputDir(); err == nil {
+		t.Fatal("symlink leaf must be rejected")
+	}
+}

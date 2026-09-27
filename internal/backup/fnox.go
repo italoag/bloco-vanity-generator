@@ -47,8 +47,9 @@ type Receipt struct {
 }
 
 type PendingError struct {
-	Path string
-	Err  error
+	Path      string
+	FinalPath string
+	Err       error
 }
 
 func (e *PendingError) Error() string {
@@ -58,7 +59,11 @@ func (e *PendingError) Error() string {
 	} else if errors.Is(e.Err, context.DeadlineExceeded) {
 		reason = "timed out"
 	}
-	return fmt.Sprintf("backup left as encrypted pending artifact at %s: %s", strconv.Quote(e.Path), reason)
+	msg := fmt.Sprintf("backup left as encrypted pending artifact at %s: %s", strconv.Quote(e.Path), reason)
+	if e.FinalPath != "" {
+		msg += fmt.Sprintf("; final-link cleanup was not confirmed; inspect both paths: %s", strconv.Quote(e.FinalPath))
+	}
+	return msg
 }
 
 func (e *PendingError) Unwrap() error {
@@ -74,6 +79,7 @@ type Store struct {
 	keychainAccount string
 	timeout         time.Duration
 	runner          commandRunner
+	publication     *publicationOps
 }
 
 func NewStore(opts Options) (*Store, error) {
@@ -464,7 +470,10 @@ func (s *Store) prepareOutputDir() error {
 		if err := os.MkdirAll(s.outputDir, 0700); err != nil {
 			return fmt.Errorf("output directory setup failed")
 		}
-		return nil
+		info, err = os.Lstat(s.outputDir)
+		if err != nil {
+			return fmt.Errorf("output directory invalid")
+		}
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("output directory invalid")
@@ -608,19 +617,12 @@ func (s *Store) Save(ctx context.Context, b *Bundle) (Receipt, error) {
 	if err := ctx.Err(); err != nil {
 		return pending(safeCommandError(err, "backup verification failed"))
 	}
-	if err := os.Link(cfgPath, final); err != nil {
-		return pending(fmt.Errorf("backup publish failed"))
-	}
-	info, err := os.Lstat(final)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-		return pending(fmt.Errorf("backup verification failed"))
-	}
-	stagedInfo, err := os.Lstat(cfgPath)
-	if err != nil || !os.SameFile(stagedInfo, info) {
-		return pending(fmt.Errorf("backup verification failed"))
-	}
-	if err := syncDir(s.outputDir); err != nil {
-		return pending(fmt.Errorf("backup durability check failed"))
+	if err := s.publishArtifact(cfgPath, final); err != nil {
+		pe := &PendingError{Path: cfgPath, Err: err}
+		if errors.Is(err, errPublicationRollback) {
+			pe.FinalPath = final
+		}
+		return Receipt{}, pe
 	}
 	_ = os.RemoveAll(stageDir)
 	return Receipt{Path: final, ID: b.ID}, nil

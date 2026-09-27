@@ -186,6 +186,7 @@ With fnox selected:
 - The private key, mnemonic, and keystore password are never printed; stdout and the TUI carry public metadata plus the confirmed artifact path only (`Encrypted backup confirmed: "<path>"`).
 - No `.pwd`, `.mnemonic`, `.key`, or plaintext keystore JSON files are written.
 - The artifact is `0600`, contains ciphertext plus public metadata, and is only published after an encrypted write and decrypt-verify roundtrip. If encryption fails before ciphertext exists, nothing recoverable is claimed and the address must not be used.
+- With `--count N` in text mode, each wallet is encrypted and confirmed before the next wallet is generated — a failure mid-batch leaves the already-confirmed backups intact and stops generation rather than collecting everything in memory first.
 
 Requirements: `fnox` `1.35.2` and `age` `1.2.1`. The repository `mise.toml` pins both:
 
@@ -270,7 +271,7 @@ The keychain path is not covered by automated tests; treat the bootstrap as a ma
 
 ### Verifying and exporting backups
 
-`backup doctor` also checks that `--backup-dir` exists or can be created (`0700`), is not a symlink, has no group/other permissions, and is writable — no chmod is applied to existing directories.
+`backup doctor` also checks that `--backup-dir` exists or can be created (`0700`), is not a symlink, has no group/other permissions, and is writable — no chmod is applied to existing directories. Newly created directory trees get `0700` on every new level, but parent directories you provide are never modified: a public or group-readable ancestor stays as it is, meaning backup directory *names* may be visible to others even though the leaf and files inside block ordinary traversal. Choose a trusted parent location; the private leaf does not defend against a hostile owner/admin manipulating the surrounding namespace.
 
 ```bash
 RECIPIENT="age1yourrecipient..."
@@ -286,7 +287,8 @@ NEW_EXPORT_DIR="/secure/dir/new-export"                  # must not exist yet; i
 ```
 
 - `backup verify` prints only network/address/ID and a Bitcoin warning when the stored mnemonic has role `unrelated` (it cannot restore the key).
-- `backup export` refuses to run without `--allow-plaintext` and requires `--output-dir` to be a new directory that does not exist (its parent must exist). The export writes plaintext secrets: `wallet-backup.json` contains the complete decrypted bundle (private key, mnemonic, keystore password), plus the network-specific files (Ethereum keystore JSON, `.pwd`, and optional `.mnemonic`; Bitcoin `<address>.key`; Solana `<address>.json` + `.key`). Protect or delete the directory after use. The exported Ethereum keystore keeps its generated three-word password, which is a weak human-memorable password: treat the keystore file itself as a secret.
+- `backup export` refuses to run without `--allow-plaintext` and requires `--output-dir` to be a new directory that does not exist (its parent must exist). The export writes plaintext secrets: `wallet-backup.json` contains the complete decrypted bundle (private key, mnemonic, keystore password), plus the network-specific files (Ethereum keystore JSON, `.pwd`, and optional `.mnemonic`; Bitcoin `<address>.key`; Solana `<address>.json` + `.key`). Each file is written to a private temporary file inside the export directory, fsynced, and only then published under its final name without replacing existing files, so a failed export never leaves a partial file at a final filename — a crash between staging and publishing may still leave a `.export-tmp-*` file containing plaintext inside the private export directory, which you should delete. Protect or delete the directory after use. The exported Ethereum keystore keeps its generated three-word password, which is a weak human-memorable password: treat the keystore file itself as a secret.
+- If a save fails after the final artifact was linked (for example a post-publish check or directory sync fails), the final artifact is rolled back when the staged copy is verifiably still present, and the error is reported as a pending backup you can retry — the retry does not collide with a leftover file. If rollback cannot confirm it owns the final file (it was replaced, its source is gone, or removal is denied) or cannot confirm removal durably, the error names both the pending path and the final path with a `final-link cleanup was not confirmed` warning so you can inspect them — the final file may or may not still be present.
 - If a save is interrupted after ciphertext was written, a `.fnox-pending-*` directory retains the encrypted `backup.fnox.toml`; point `backup verify`/`backup export` at that file to recover.
 - Scope of the no-plaintext guarantee: generation and `verify` never write plaintext secrets, including on failure paths. An explicit `--allow-plaintext` export writes plaintext by design and could leave files behind if the OS prevents cleanup — it reports the error in that case. Encryption at rest is not protection against a compromised process or user session, and zeroization of Go strings is not guaranteed.
 

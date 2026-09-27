@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -204,4 +207,166 @@ func TestExportRollbackOnWriteFault(t *testing.T) {
 	if err != nil || string(data) != "keep" {
 		t.Fatal("unrelated file modified")
 	}
+}
+
+func TestWriteExportFile(t *testing.T) {
+	payload := []byte(`{"x":1}`)
+
+	assertNoTemps := func(t *testing.T, dir string) {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read dir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".export-tmp-") {
+				t.Fatal("stale temp left behind")
+			}
+		}
+	}
+
+	t.Run("success_stages_and_links", func(t *testing.T) {
+		dir := t.TempDir()
+		final := filepath.Join(dir, "wallet-backup.json")
+		var publishBytes []byte
+		var publishPerm os.FileMode
+		err := writeExportFileWith(final, payload, writeSyncClose, func(tmp, dst string) error {
+			if _, lerr := os.Lstat(dst); !os.IsNotExist(lerr) {
+				t.Fatal("final must not exist before publish")
+			}
+			b, rerr := os.ReadFile(tmp)
+			if rerr != nil {
+				return rerr
+			}
+			publishBytes = b
+			info, serr := os.Lstat(tmp)
+			if serr != nil {
+				return serr
+			}
+			publishPerm = info.Mode().Perm()
+			return os.Link(tmp, dst)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(publishBytes) != string(payload) {
+			t.Fatal("publish must see complete bytes")
+		}
+		if publishPerm != 0600 {
+			t.Fatalf("staged perm %v", publishPerm)
+		}
+		got, err := os.ReadFile(final)
+		if err != nil {
+			t.Fatalf("read final: %v", err)
+		}
+		if string(got) != string(payload) {
+			t.Fatal("final missing or wrong content")
+		}
+		assertNoTemps(t, dir)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read dir: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatal("temp file not cleaned")
+		}
+	})
+
+	t.Run("write_error_leaves_no_final_or_temp", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "partial.json")
+		write := func(f *os.File, data []byte) error {
+			if _, err := f.Write(data[:3]); err != nil {
+				return err
+			}
+			if err := f.Close(); err != nil {
+				return err
+			}
+			return fmt.Errorf("injected write failure")
+		}
+		err := writeExportFileWith(target, payload, write, os.Link)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			t.Fatal("final must be absent")
+		}
+		assertNoTemps(t, dir)
+	})
+
+	t.Run("existing_file_preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "existing.json")
+		if err := os.WriteFile(target, []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		err := writeExportFileWith(target, payload, writeSyncClose, os.Link)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected ErrExist, got %v", err)
+		}
+		got, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatalf("read existing: %v", err)
+		}
+		if string(got) != "keep" {
+			t.Fatal("existing file overwritten")
+		}
+		assertNoTemps(t, dir)
+	})
+
+	t.Run("existing_directory_preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "existing-dir")
+		if err := os.Mkdir(target, 0700); err != nil {
+			t.Fatal(err)
+		}
+		err := writeExportFileWith(target, payload, writeSyncClose, os.Link)
+		if err == nil {
+			t.Fatal("expected error for directory target")
+		}
+		info, err := os.Lstat(target)
+		if err != nil {
+			t.Fatalf("lstat target: %v", err)
+		}
+		if !info.IsDir() {
+			t.Fatal("directory target must remain a directory")
+		}
+		assertNoTemps(t, dir)
+	})
+
+	t.Run("dangling_symlink_preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "dangling.json")
+		linkTarget := filepath.Join(dir, "missing")
+		if err := os.Symlink(linkTarget, target); err != nil {
+			t.Fatal(err)
+		}
+		err := writeExportFileWith(target, payload, writeSyncClose, os.Link)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			t.Fatalf("expected ErrExist, got %v", err)
+		}
+		got, err := os.Readlink(target)
+		if err != nil {
+			t.Fatalf("symlink removed: %v", err)
+		}
+		if got != linkTarget {
+			t.Fatal("symlink target changed")
+		}
+		assertNoTemps(t, dir)
+	})
+
+	t.Run("publish_failure_leaves_no_final_or_temp", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "pubfail.json")
+		err := writeExportFileWith(target, payload, writeSyncClose, func(string, string) error {
+			return fmt.Errorf("injected publish failure")
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			t.Fatal("final must be absent")
+		}
+		assertNoTemps(t, dir)
+	})
 }

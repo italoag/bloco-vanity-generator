@@ -845,3 +845,110 @@ func TestBackupExportCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestFnoxTextBatchPersistsBeforeNextGeneration(t *testing.T) {
+	t.Run("incremental_persistence", func(t *testing.T) {
+		app, fake := newFnoxTestApp(t)
+		pool := &stubWorkerPool{
+			stats: worker.NewStatsCollector(),
+		}
+		criteria := wallet.GenerationCriteria{Network: "ethereum"}
+		var first *wallet.GenerationResult
+		pool.next = func() (*wallet.GenerationResult, error) {
+			if pool.calls == 2 {
+				if fake.saveCalls != 1 {
+					t.Error("first wallet must be persisted before second generation")
+				}
+				if _, ok := app.backupReceipt(first.Wallet); !ok {
+					t.Error("receipt for first wallet must exist before second generation")
+				}
+			}
+			res := stubResult(t, true)
+			if pool.calls == 1 {
+				first = res
+			}
+			return res, nil
+		}
+		stdout, stderr, err := captureStdStreams(t, func() error {
+			return app.generateMultipleWalletsText(context.Background(), pool, criteria, 2, false)
+		})
+		if err != nil {
+			t.Fatalf("batch failed: %v", err)
+		}
+		if fake.saveCalls != 2 {
+			t.Fatalf("expected 2 saves, got %d", fake.saveCalls)
+		}
+		if pool.calls != 2 {
+			t.Fatalf("expected 2 generations, got %d", pool.calls)
+		}
+		output := stdout + stderr
+		if !strings.Contains(output, "Encrypted backups confirmed: 2/2") {
+			t.Fatalf("missing summary:\n%s", output)
+		}
+		assertNoBundleSecrets(t, stdout, stderr, fake.saved)
+	})
+
+	t.Run("cancellation_preserves_first_save", func(t *testing.T) {
+		app, fake := newFnoxTestApp(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		pool := &stubWorkerPool{
+			stats: worker.NewStatsCollector(),
+		}
+		pool.next = func() (*wallet.GenerationResult, error) {
+			if pool.calls == 2 {
+				cancel()
+				return nil, ctx.Err()
+			}
+			return stubResult(t, true), nil
+		}
+		stdout, stderr, err := captureStdStreams(t, func() error {
+			return app.generateMultipleWalletsText(ctx, pool, wallet.GenerationCriteria{Network: "ethereum"}, 2, false)
+		})
+		if err == nil || !stderrors.Is(err, context.Canceled) {
+			t.Fatalf("expected wrapped context.Canceled, got %v", err)
+		}
+		if fake.saveCalls != 1 {
+			t.Fatalf("expected exactly 1 save, got %d", fake.saveCalls)
+		}
+		output := stdout + stderr
+		if !strings.Contains(output, "Wallet 1:") || !strings.Contains(output, "Encrypted backup confirmed") {
+			t.Fatalf("first wallet confirmation missing:\n%s", output)
+		}
+		assertNoBundleSecrets(t, stdout, stderr, fake.saved)
+	})
+
+	t.Run("pending_error_stops_batch", func(t *testing.T) {
+		app, fake := newFnoxTestApp(t)
+		pending := &backup.PendingError{Path: filepath.Join(t.TempDir(), "pending", "w.fnox.toml"), Err: context.DeadlineExceeded}
+		fake.saveErr = pending
+		pool := &stubWorkerPool{
+			stats: worker.NewStatsCollector(),
+			next:  func() (*wallet.GenerationResult, error) { return stubResult(t, true), nil },
+		}
+		stdout, stderr, err := captureStdStreams(t, func() error {
+			return app.generateMultipleWalletsText(context.Background(), pool, wallet.GenerationCriteria{Network: "ethereum"}, 2, false)
+		})
+		if err == nil {
+			t.Fatal("expected persistence error")
+		}
+		var pe *backup.PendingError
+		if !stderrors.As(err, &pe) {
+			t.Fatalf("expected PendingError preserved, got %v", err)
+		}
+		if pe.Path != pending.Path {
+			t.Fatal("pending path not preserved")
+		}
+		if pool.calls != 1 {
+			t.Fatalf("no generation should happen after failed save, got %d", pool.calls)
+		}
+		if fake.saveCalls != 1 {
+			t.Fatalf("expected 1 save attempt, got %d", fake.saveCalls)
+		}
+		output := stdout + stderr
+		if !strings.Contains(output, "Encrypted backup not confirmed") {
+			t.Fatalf("missing unconfirmed notice:\n%s", output)
+		}
+		assertNoBundleSecrets(t, stdout, stderr, fake.saved)
+	})
+}
