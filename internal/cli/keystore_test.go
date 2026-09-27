@@ -377,7 +377,7 @@ func quitAfterWalletResults(expected int, capture func(tui.WalletResultMsg)) fun
 				capture(m)
 			}
 		case tui.ProgressMsg:
-			if received == expected && m.IsComplete {
+			if received >= expected && m.IsComplete {
 				return tea.QuitMsg{}
 			}
 		}
@@ -452,6 +452,65 @@ func TestQuitAfterWalletResults(t *testing.T) {
 	got = nilCapture(nil, complete)
 	if _, ok := got.(tea.QuitMsg); !ok {
 		t.Fatalf("expected tea.QuitMsg with nil capture, got %T", got)
+	}
+
+	var extra []tui.WalletResultMsg
+	overflow := quitAfterWalletResults(2, func(m tui.WalletResultMsg) { extra = append(extra, m) })
+	for i := 1; i <= 3; i++ {
+		m := walletMsg(i)
+		if got := overflow(nil, m); got != m {
+			t.Fatalf("wallet result %d must pass through, got %T", i, got)
+		}
+	}
+	if len(extra) != 3 {
+		t.Fatalf("expected 3 captured results, got %d", len(extra))
+	}
+	if got := overflow(nil, incomplete); got != incomplete {
+		t.Fatalf("incomplete progress must not quit, got %T", got)
+	}
+	got = overflow(nil, complete)
+	if _, ok := got.(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg after excess results, got %T", got)
+	}
+}
+
+func TestWalletTUISuccessUsesProductionQuit(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multi=%v", multi), func(t *testing.T) {
+			expected := 1
+			if multi {
+				expected = 2
+			}
+			received := 0
+			sawQuit := false
+			app := headlessApp(t, t.TempDir(), tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+				switch msg.(type) {
+				case tui.WalletResultMsg:
+					received++
+				case tui.QuitMsg:
+					sawQuit = true
+				}
+				return msg
+			}))
+			app.config.KeyStore.Enabled = false
+			result := stubResult(t, false)
+			pool := &stubWorkerPool{stats: worker.NewStatsCollector(), next: func() (*wallet.GenerationResult, error) { return result, nil }}
+			err := captureOutput(t, func() error {
+				if multi {
+					return app.generateMultipleWalletsTUI(t.Context(), pool, wallet.GenerationCriteria{Network: "ethereum"}, expected, tui.EngineInfo{Engine: "cpu"})
+				}
+				return app.generateSingleWalletTUI(t.Context(), pool, wallet.GenerationCriteria{Network: "ethereum"}, tui.EngineInfo{Engine: "cpu"})
+			})
+			if err != nil {
+				t.Fatalf("TUI completion failed: %v", err)
+			}
+			if !sawQuit {
+				t.Fatal("production quit message was not observed")
+			}
+			if received != expected || pool.calls != expected {
+				t.Fatalf("received %d results from %d calls; expected %d", received, pool.calls, expected)
+			}
+		})
 	}
 }
 
