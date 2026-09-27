@@ -767,3 +767,464 @@ func TestStoreDoctorOutputDirProbe(t *testing.T) {
 		}
 	})
 }
+
+func TestStoreSavePublicationFailure(t *testing.T) {
+	t.Run("sync_failure_retains_both_and_retry_collides", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		outSyncs := 0
+		store.publication = &publicationOps{
+			syncDir: func(dir string) error {
+				if dir == outDir {
+					outSyncs++
+					if outSyncs == 1 {
+						return fmt.Errorf("injected sync failure")
+					}
+				}
+				return syncDir(dir)
+			},
+		}
+		b := ethereumBundle(t, false)
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationUnconfirmed) {
+			t.Fatal("unconfirmed marker missing")
+		}
+		final := filepath.Join(outDir, b.Filename())
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed publication")
+		}
+		stageInfo, err := os.Lstat(pe.Path)
+		if err != nil {
+			t.Fatalf("pending artifact missing: %v", err)
+		}
+		finalInfo, err := os.Lstat(final)
+		if err != nil {
+			t.Fatalf("final must be retained: %v", err)
+		}
+		if !os.SameFile(stageInfo, finalInfo) {
+			t.Fatal("final must be the same file as the staged copy")
+		}
+		if _, err := store.Load(context.Background(), pe.Path); err != nil {
+			t.Fatalf("pending artifact not loadable: %v", err)
+		}
+		retry := newTestStore(t, outDir, runner)
+		_, err = retry.Save(context.Background(), b)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			t.Fatalf("blind retry must collide with ErrExist, got %v", err)
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatal("staged copy must not be deleted")
+		}
+		if _, err := os.Lstat(final); err != nil {
+			t.Fatal("final copy must not be deleted")
+		}
+	})
+
+	t.Run("postlink_lstat_failure_retains_both", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		finalStats := 0
+		store.publication = &publicationOps{
+			lstat: func(path string) (os.FileInfo, error) {
+				if path == final {
+					finalStats++
+					if finalStats == 1 {
+						return nil, fmt.Errorf("injected lstat failure")
+					}
+				}
+				return os.Lstat(path)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationUnconfirmed) {
+			t.Fatal("unconfirmed marker missing")
+		}
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed publication")
+		}
+		if _, err := os.Lstat(final); err != nil {
+			t.Fatal("final must be retained")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatal("pending artifact must be retained")
+		}
+	})
+
+	t.Run("replaced_final_preserved", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		store.publication = &publicationOps{
+			link: func(src, dst string) error {
+				if err := os.Link(src, dst); err != nil {
+					return err
+				}
+				if err := os.Remove(dst); err != nil {
+					return err
+				}
+				return os.WriteFile(dst, []byte("unrelated sentinel"), 0600)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationUnconfirmed) {
+			t.Fatal("unconfirmed marker missing")
+		}
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed publication")
+		}
+		if !strings.Contains(pe.Error(), "the final path was not removed automatically") {
+			t.Fatalf("missing retention warning: %s", pe.Error())
+		}
+		content, err := os.ReadFile(final)
+		if err != nil {
+			t.Fatalf("read final: %v", err)
+		}
+		if string(content) != "unrelated sentinel" {
+			t.Fatal("unrelated final must be preserved")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatalf("pending artifact missing: %v", err)
+		}
+	})
+
+	t.Run("late_replacement_after_identity_check", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		finalStats := 0
+		syncCalls := 0
+		store.publication = &publicationOps{
+			lstat: func(path string) (os.FileInfo, error) {
+				if path == final {
+					finalStats++
+					if finalStats == 1 {
+						info, err := os.Lstat(path)
+						if err != nil {
+							return nil, err
+						}
+						if err := os.Remove(path); err != nil {
+							return nil, err
+						}
+						if err := os.WriteFile(path, []byte("late sentinel"), 0600); err != nil {
+							return nil, err
+						}
+						return info, nil
+					}
+				}
+				return os.Lstat(path)
+			},
+			syncDir: func(dir string) error {
+				if dir == outDir {
+					syncCalls++
+					if syncCalls == 1 {
+						content, err := os.ReadFile(final)
+						if err != nil {
+							return err
+						}
+						if string(content) != "late sentinel" {
+							return fmt.Errorf("sentinel must remain during sync")
+						}
+					}
+				}
+				return syncDir(dir)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationUnconfirmed) {
+			t.Fatal("unconfirmed marker missing")
+		}
+		content, err := os.ReadFile(final)
+		if err != nil {
+			t.Fatalf("read final: %v", err)
+		}
+		if string(content) != "late sentinel" {
+			t.Fatal("late replacement must not be deleted")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatal("staged copy must be retained")
+		}
+	})
+
+	t.Run("missing_source_preserves_sole_final", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		var stagedPath string
+		store.publication = &publicationOps{
+			link: func(src, dst string) error {
+				stagedPath = src
+				return os.Link(src, dst)
+			},
+			syncDir: func(dir string) error {
+				if dir == outDir {
+					if stagedPath != "" {
+						if rerr := os.Remove(stagedPath); rerr != nil {
+							t.Errorf("staged removal fixture: %v", rerr)
+						}
+					}
+					return fmt.Errorf("injected sync failure")
+				}
+				return syncDir(dir)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, errPublicationUnconfirmed) {
+			t.Fatal("unconfirmed marker missing")
+		}
+		if pe.FinalPath != final {
+			t.Fatal("FinalPath must mark unconfirmed publication")
+		}
+		if _, err := os.Lstat(final); err != nil {
+			t.Fatal("sole final copy must be preserved")
+		}
+	})
+
+	t.Run("replaced_during_successful_sync", func(t *testing.T) {
+		cases := map[string]func(final, staged string) error{
+			"deleted_then_sentinel": func(final, staged string) error {
+				if err := os.Remove(final); err != nil {
+					return err
+				}
+				return os.WriteFile(final, []byte("sentinel"), 0600)
+			},
+			"missing": func(final, staged string) error {
+				return os.Remove(final)
+			},
+			"symlink": func(final, staged string) error {
+				if err := os.Remove(final); err != nil {
+					return err
+				}
+				return os.Symlink(staged, final)
+			},
+			"perm_change": func(final, staged string) error {
+				return os.Chmod(final, 0644)
+			},
+		}
+		for name, mutate := range cases {
+			t.Run(name, func(t *testing.T) {
+				runner := newFakeRunner()
+				outDir := t.TempDir()
+				store := newTestStore(t, outDir, runner)
+				b := ethereumBundle(t, false)
+				final := filepath.Join(outDir, b.Filename())
+				var stagedPath string
+				mutated := false
+				store.publication = &publicationOps{
+					link: func(src, dst string) error {
+						stagedPath = src
+						return os.Link(src, dst)
+					},
+					syncDir: func(dir string) error {
+						if dir == outDir && !mutated {
+							mutated = true
+							if err := mutate(final, stagedPath); err != nil {
+								return err
+							}
+						}
+						return syncDir(dir)
+					},
+				}
+				_, err := store.Save(context.Background(), b)
+				var pe *PendingError
+				if !errors.As(err, &pe) {
+					t.Fatalf("expected PendingError, got %v", err)
+				}
+				if !errors.Is(err, errPublicationUnconfirmed) {
+					t.Fatal("unconfirmed marker missing")
+				}
+				if _, err := os.Lstat(pe.Path); err != nil {
+					t.Fatal("staged copy must be retained")
+				}
+			})
+		}
+	})
+
+	t.Run("link_collision_preserved", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		b := ethereumBundle(t, false)
+		final := filepath.Join(outDir, b.Filename())
+		store.publication = &publicationOps{
+			link: func(src, dst string) error {
+				if err := os.WriteFile(dst, []byte("competitor"), 0600); err != nil {
+					return err
+				}
+				return os.Link(src, dst)
+			},
+		}
+		_, err := store.Save(context.Background(), b)
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatal("link collision must preserve os.ErrExist")
+		}
+		if errors.Is(err, errPublicationUnconfirmed) {
+			t.Fatal("link never succeeded; no unconfirmed marker expected")
+		}
+		if !strings.Contains(pe.Error(), "destination already exists") {
+			t.Fatalf("missing actionable reason: %s", pe.Error())
+		}
+		content, err := os.ReadFile(final)
+		if err != nil {
+			t.Fatalf("read final: %v", err)
+		}
+		if string(content) != "competitor" {
+			t.Fatal("competitor file must be unchanged")
+		}
+		if _, err := os.Lstat(pe.Path); err != nil {
+			t.Fatal("staged copy must be retained")
+		}
+	})
+
+	t.Run("link_permission_error_sanitized", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		store.publication = &publicationOps{
+			link: func(string, string) error {
+				return os.ErrPermission
+			},
+		}
+		_, err := store.Save(context.Background(), ethereumBundle(t, false))
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if !errors.Is(err, os.ErrPermission) {
+			t.Fatal("os.ErrPermission must survive wrapping")
+		}
+		if strings.Contains(pe.Error(), "permission denied") {
+			t.Fatalf("raw error must not leak into user message: %s", pe.Error())
+		}
+	})
+
+	t.Run("link_generic_error_hides_details", func(t *testing.T) {
+		runner := newFakeRunner()
+		outDir := t.TempDir()
+		store := newTestStore(t, outDir, runner)
+		store.publication = &publicationOps{
+			link: func(string, string) error {
+				return fmt.Errorf("secret internal detail")
+			},
+		}
+		_, err := store.Save(context.Background(), ethereumBundle(t, false))
+		var pe *PendingError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected PendingError, got %v", err)
+		}
+		if strings.Contains(pe.Error(), "secret internal detail") {
+			t.Fatalf("raw error must not leak into user message: %s", pe.Error())
+		}
+	})
+}
+
+func TestPendingErrorReasons(t *testing.T) {
+	pending := &PendingError{Path: "/p/f.fnox.toml", Err: context.Canceled}
+	if got := pending.Error(); !strings.Contains(got, "canceled") {
+		t.Fatalf("missing canceled reason: %s", got)
+	}
+	pending = &PendingError{Path: "/p/f.fnox.toml", Err: context.DeadlineExceeded}
+	if got := pending.Error(); !strings.Contains(got, "timed out") {
+		t.Fatalf("missing timeout reason: %s", got)
+	}
+	pending = &PendingError{Path: "/p/f.fnox.toml", Err: fmt.Errorf("wrap: %w", os.ErrExist)}
+	if got := pending.Error(); !strings.Contains(got, "destination already exists; no file was overwritten") {
+		t.Fatalf("missing exists reason: %s", got)
+	}
+	underlying := fmt.Errorf("raw detail must not print")
+	pending = &PendingError{Path: "/p/f.fnox.toml", Err: underlying}
+	if got := pending.Error(); strings.Contains(got, "raw detail") {
+		t.Fatalf("raw error leaked: %s", got)
+	}
+}
+
+func TestPrepareOutputDirNestedUnderPublicParent(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentMode := info.Mode().Perm()
+	if parentMode != 0755 {
+		t.Fatalf("fixture parent mode %v, want 0755", parentMode)
+	}
+
+	leaf := filepath.Join(parent, "intermediate", "leaf")
+	if err := (&Store{outputDir: leaf}).prepareOutputDir(); err != nil {
+		t.Fatalf("prepareOutputDir: %v", err)
+	}
+	for _, dir := range []string{filepath.Join(parent, "intermediate"), leaf} {
+		fi, err := os.Lstat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fi.IsDir() || fi.Mode().Perm() != 0700 {
+			t.Fatalf("created dir %s mode %v, want 0700 dir", dir, fi.Mode())
+		}
+	}
+	fi, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != parentMode {
+		t.Fatalf("parent mode changed: %v -> %v", parentMode, fi.Mode().Perm())
+	}
+	if err := (&Store{outputDir: leaf}).prepareOutputDir(); err != nil {
+		t.Fatalf("second call must pass: %v", err)
+	}
+
+	broad := filepath.Join(parent, "broad")
+	if err := os.Mkdir(broad, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(broad, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Store{outputDir: broad}).prepareOutputDir(); err == nil {
+		t.Fatal("existing broad leaf must still be rejected")
+	}
+
+	link := filepath.Join(parent, "linkleaf")
+	if err := os.Symlink(leaf, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Store{outputDir: link}).prepareOutputDir(); err == nil {
+		t.Fatal("symlink leaf must be rejected")
+	}
+}

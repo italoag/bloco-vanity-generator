@@ -236,6 +236,9 @@ func (b *Bundle) validateMetadata() error {
 			if b.MnemonicRole != roleUnrelated {
 				return fmt.Errorf("inconsistent mnemonic metadata")
 			}
+			if !bip39.IsMnemonicValid(b.Mnemonic) {
+				return fmt.Errorf("invalid bitcoin mnemonic format")
+			}
 		} else if b.MnemonicRole != "" {
 			return fmt.Errorf("inconsistent mnemonic metadata")
 		}

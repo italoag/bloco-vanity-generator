@@ -70,7 +70,6 @@ func TestFnoxCLIIntegration(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.TUI.Enabled = false
 		cfg.Logging.Enabled = false
-		cfg.KeyStore.KDFAlgorithm = "pbkdf2"
 		cfg.Backup.OutputDir = filepath.Join(t.TempDir(), "backups")
 		app := NewApplication(cfg, "test", "test", "test")
 		root := app.GetRootCommand()
@@ -111,20 +110,23 @@ func TestFnoxCLIIntegration(t *testing.T) {
 		}
 	})
 
-	generate := func(t *testing.T, count int, extra ...string) ([]string, string) {
+	generate := func(t *testing.T, count int, kdf string, extra ...string) ([]string, string) {
 		t.Helper()
 		backupDir := filepath.Join(t.TempDir(), "backups")
 		app, buf := newCLIApp()
-		args := append([]string{
+		args := []string{
 			"--no-tui", "--no-logging", "--engine", "cpu", "--threads", "1",
-			"--keystore-kdf", "pbkdf2",
 			"--backup-store", "fnox",
 			"--backup-dir", backupDir,
 			"--fnox-bin", "fnox",
 			"--age-recipient", recipient,
 			"--age-identity", identity,
 			"--count", strconv.Itoa(count),
-		}, extra...)
+		}
+		if kdf != "" {
+			args = append(args, "--keystore-kdf", kdf)
+		}
+		args = append(args, extra...)
 		app.GetRootCommand().SetArgs(args)
 		stdout, stderr, err := captureStdStreams(t, func() error {
 			return app.ExecuteContext(context.Background())
@@ -230,7 +232,7 @@ func TestFnoxCLIIntegration(t *testing.T) {
 	}
 
 	t.Run("ethereum", func(t *testing.T) {
-		paths, genOut := generate(t, 1, "--network", "ethereum", "--with-mnemonic")
+		paths, genOut := generate(t, 1, "pbkdf2", "--network", "ethereum", "--with-mnemonic")
 		b := loadBundle(t, paths[0])
 		if b.Network != "ethereum" || !strings.HasPrefix(b.Address, "0x") {
 			t.Fatalf("unexpected bundle: %s %s", b.Network, b.Address)
@@ -255,7 +257,7 @@ func TestFnoxCLIIntegration(t *testing.T) {
 	})
 
 	t.Run("ethereum_count2", func(t *testing.T) {
-		paths, genOut := generate(t, 2, "--network", "ethereum")
+		paths, genOut := generate(t, 2, "pbkdf2", "--network", "ethereum")
 		seen := map[string]bool{}
 		for _, path := range paths {
 			b := loadBundle(t, path)
@@ -281,7 +283,7 @@ func TestFnoxCLIIntegration(t *testing.T) {
 	})
 
 	t.Run("solana", func(t *testing.T) {
-		paths, genOut := generate(t, 1, "--network", "solana")
+		paths, genOut := generate(t, 1, "pbkdf2", "--network", "solana")
 		b := loadBundle(t, paths[0])
 		if b.Network != "solana" {
 			t.Fatalf("unexpected network %s", b.Network)
@@ -301,7 +303,7 @@ func TestFnoxCLIIntegration(t *testing.T) {
 	})
 
 	t.Run("bitcoin", func(t *testing.T) {
-		paths, genOut := generate(t, 1, "--network", "bitcoin")
+		paths, genOut := generate(t, 1, "pbkdf2", "--network", "bitcoin")
 		b := loadBundle(t, paths[0])
 		if b.Network != "bitcoin" || b.MnemonicRole != "unrelated" {
 			t.Fatalf("unexpected bundle: %s role=%s", b.Network, b.MnemonicRole)
@@ -317,5 +319,39 @@ func TestFnoxCLIIntegration(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(exportDir, b.Address+".key")); err != nil {
 			t.Fatalf("missing bitcoin key export: %v", err)
 		}
+	})
+
+	t.Run("ethereum_default_scrypt", func(t *testing.T) {
+		paths, genOut := generate(t, 1, "", "--network", "ethereum")
+		b := loadBundle(t, paths[0])
+		if b.Keystore == nil {
+			t.Fatal("ethereum bundle missing keystore")
+		}
+		if b.Keystore.Crypto.KDF != "scrypt" {
+			t.Fatalf("expected default scrypt KDF, got %s", b.Keystore.Crypto.KDF)
+		}
+		assertCleanOutput(t, "generation", genOut, b)
+		assertCleanOutput(t, "verify", verify(t, paths[0]), b)
+		_, exportOut := export(t, paths[0])
+		assertCleanOutput(t, "export", exportOut, b)
+	})
+
+	t.Run("solana_with_mnemonic", func(t *testing.T) {
+		paths, genOut := generate(t, 1, "pbkdf2", "--network", "solana", "--with-mnemonic")
+		b := loadBundle(t, paths[0])
+		if b.Network != "solana" {
+			t.Fatalf("unexpected network %s", b.Network)
+		}
+		if b.Mnemonic != "" {
+			t.Fatal("solana bundle must not carry a mnemonic")
+		}
+		if b.Derivation != nil {
+			t.Fatal("solana bundle must not carry derivation metadata")
+		}
+		if b.KeyOrigin != "random" {
+			t.Fatalf("expected random key origin, got %s", b.KeyOrigin)
+		}
+		assertCleanOutput(t, "generation", genOut, b)
+		assertCleanOutput(t, "verify", verify(t, paths[0]), b)
 	})
 }

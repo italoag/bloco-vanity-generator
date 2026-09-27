@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"bloco-vgen/internal/backup"
 	"bloco-vgen/internal/crypto"
+	"bloco-vgen/internal/worker"
 	"bloco-vgen/pkg/wallet"
 )
 
@@ -216,4 +218,33 @@ func (app *Application) createBackupCommand() *cobra.Command {
 	cmd.AddCommand(exportCmd)
 
 	return cmd
+}
+
+func (app *Application) generateMultipleWalletsFnoxText(ctx context.Context, workerPool worker.WorkerPool, criteria wallet.GenerationCriteria, count int, showProgress bool) error {
+	start := time.Now()
+	var totalAttempts int64
+	if showProgress && !app.config.CLI.QuietMode {
+		fmt.Printf("Generating %d wallets with encrypted backups\n", count)
+	}
+	for i := 0; i < count; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		result, err := workerPool.GenerateWalletWithContext(ctx, criteria)
+		if err != nil {
+			return fmt.Errorf("wallet generation interrupted: %w", err)
+		}
+		if err := app.generateAndSaveKeystoreContext(ctx, result.Wallet, app.config.CLI.VerboseOutput); err != nil {
+			fmt.Printf("Wallet %d: %s %s\nEncrypted backup not confirmed\n", i+1, result.Wallet.Network, result.Wallet.Address)
+			return fmt.Errorf("failed to persist wallet %s: %w", result.Wallet.Address, err)
+		}
+		receipt, ok := app.backupReceipt(result.Wallet)
+		if !ok {
+			return fmt.Errorf("encrypted backup receipt missing")
+		}
+		totalAttempts += result.Attempts
+		fmt.Printf("Wallet %d: %s %s\nEncrypted backup confirmed: %q\n", i+1, result.Wallet.Network, result.Wallet.Address, receipt.Path)
+	}
+	fmt.Printf("Encrypted backups confirmed: %d/%d\nTotal attempts: %s\nTotal duration: %s\n", count, count, formatLargeNumber(totalAttempts), formatDuration(time.Since(start)))
+	return nil
 }

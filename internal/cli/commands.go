@@ -844,6 +844,9 @@ func (app *Application) generateMultipleWalletsText(
 	count int,
 	showProgress bool,
 ) error {
+	if app.config.Backup.Store == "fnox" {
+		return app.generateMultipleWalletsFnoxText(ctx, workerPool, criteria, count, showProgress)
+	}
 	if showProgress && !app.config.CLI.QuietMode {
 		fmt.Printf("Generating %d wallets with pattern: %s\n", count, criteria.GetPattern())
 		fmt.Printf("Difficulty: %s\n", formatLargeNumber(int64(calculateDifficulty(criteria))))

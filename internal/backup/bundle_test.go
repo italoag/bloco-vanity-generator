@@ -374,3 +374,32 @@ func TestDecodeBundleStrict(t *testing.T) {
 		}
 	})
 }
+
+func TestBitcoinBundleMnemonicValidation(t *testing.T) {
+	t.Run("invalid_checksum_rejected", func(t *testing.T) {
+		b := bitcoinBundle(t, true)
+		b.Mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
+		if err := b.Validate(); err == nil {
+			t.Fatal("invalid checksum must fail validation")
+		}
+	})
+	t.Run("nonwordlist_rejected", func(t *testing.T) {
+		b := bitcoinBundle(t, true)
+		b.Mnemonic = "notaword abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
+		if err := b.Validate(); err == nil {
+			t.Fatal("non-wordlist mnemonic must fail validation")
+		}
+	})
+	t.Run("empty_accepted", func(t *testing.T) {
+		b := bitcoinBundle(t, false)
+		if err := b.Validate(); err != nil {
+			t.Fatalf("empty mnemonic must stay valid: %v", err)
+		}
+	})
+	t.Run("valid_unrelated_accepted", func(t *testing.T) {
+		b := bitcoinBundle(t, true)
+		if err := b.Validate(); err != nil {
+			t.Fatalf("valid unrelated mnemonic must pass: %v", err)
+		}
+	})
+}
