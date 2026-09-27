@@ -58,10 +58,12 @@ func (e *PendingError) Error() string {
 		reason = "canceled"
 	} else if errors.Is(e.Err, context.DeadlineExceeded) {
 		reason = "timed out"
+	} else if errors.Is(e.Err, os.ErrExist) {
+		reason = "destination already exists; no file was overwritten"
 	}
 	msg := fmt.Sprintf("backup left as encrypted pending artifact at %s: %s", strconv.Quote(e.Path), reason)
 	if e.FinalPath != "" {
-		msg += fmt.Sprintf("; final-link cleanup was not confirmed; inspect both paths: %s", strconv.Quote(e.FinalPath))
+		msg += fmt.Sprintf("; publication was not confirmed and the final path was not removed automatically; inspect both paths: %s", strconv.Quote(e.FinalPath))
 	}
 	return msg
 }
@@ -619,7 +621,7 @@ func (s *Store) Save(ctx context.Context, b *Bundle) (Receipt, error) {
 	}
 	if err := s.publishArtifact(cfgPath, final); err != nil {
 		pe := &PendingError{Path: cfgPath, Err: err}
-		if errors.Is(err, errPublicationRollback) {
+		if errors.Is(err, errPublicationUnconfirmed) {
 			pe.FinalPath = final
 		}
 		return Receipt{}, pe
