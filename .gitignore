@@ -12,3 +12,4 @@ bloco-vgen-*
 backups/
 *.fnox.toml
 .fnox-pending-*/
+.github/tests/__pycache__/
