@@ -1,7 +1,9 @@
 name: Bump Version and Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -14,12 +16,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bump:
+  verify-ci:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.approved.outputs.sha }}
+      publish: ${{ steps.approved.outputs.publish }}
+    steps:
+      - name: Checkout trusted gate
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify exact CI commit
+        id: approved
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const {automaticTarget} = require('./.github/ci-gate.cjs');
+            const target = await automaticTarget(github, context);
+            for (const [key, value] of Object.entries(target)) core.setOutput(key, value);
+            if (!target.publish) core.notice('Publication skipped: main has advanced past the approved commit.');
+
+  bump:
+    needs: verify-ci
+    if: needs.verify-ci.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: ${{ needs.verify-ci.outputs.sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ needs.verify-ci.outputs.sha }}
           fetch-depth: 0
 
       - name: Configure git
@@ -32,7 +68,7 @@ jobs:
         run: |
           current_tag=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)
           if [[ -n "$current_tag" ]]; then
-            echo "Commit ${GITHUB_SHA} already has version tag $current_tag. Skipping bump."
+            echo "Commit ${RELEASE_SHA} already has version tag $current_tag. Skipping bump."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "tag=$current_tag" >> "$GITHUB_OUTPUT"
           else
@@ -70,7 +106,7 @@ jobs:
 
           prs_json=$(gh api \
             -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" 2>/dev/null || echo "[]")
+            "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_SHA}/pulls" 2>/dev/null || echo "[]")
 
           src_branch=$(jq -r '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last | .head.ref // empty' <<< "$prs_json")
           pr_number=$(jq -r '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last | .number // empty' <<< "$prs_json")
@@ -131,19 +167,27 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create tag
-        if: steps.current.outputs.skip != 'true'
-        env:
-          NEW_TAG: ${{ steps.next.outputs.version }}
-          BUMP: ${{ steps.next.outputs.bump }}
-          REASON: ${{ steps.next.outputs.reason }}
-        run: |
-          git tag -a "$NEW_TAG" -m "Release $NEW_TAG ($BUMP): $REASON"
-          git push origin "$NEW_TAG"
-
-      - name: Trigger release workflow
+        id: tag
         if: steps.current.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_TAG: ${{ steps.next.outputs.version }}
+          BUMP: ${{ steps.next.outputs.bump }}
+          REASON: ${{ steps.next.outputs.reason }}
         run: |
-          gh workflow run release.yaml --ref "$NEW_TAG" -f tag="$NEW_TAG"
+          current_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$current_sha" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced before tag creation; publication skipped."
+            exit 0
+          fi
+          git tag -a "$NEW_TAG" -m "Release $NEW_TAG ($BUMP): $REASON"
+          git push origin "$NEW_TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger release workflow
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_TAG: ${{ steps.next.outputs.version }}
+        run: |
+          gh workflow run release.yaml --ref main -f tag="$NEW_TAG"

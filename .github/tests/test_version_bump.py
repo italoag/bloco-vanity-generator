@@ -88,5 +88,72 @@ class VersionSelectionTests(unittest.TestCase):
         self.assertEqual(self.selected_tag(), "v2.0.0")
 
 
+class TagPublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.sha = "a" * 40
+        self.calls = self.root / "git-calls"
+        self.output = self.root / "outputs"
+        self.env = {
+            **os.environ,
+            "PATH": f"{self.root}{os.pathsep}{os.environ['PATH']}",
+            "GITHUB_REPOSITORY": "owner/wallet",
+            "GITHUB_OUTPUT": str(self.output),
+            "RELEASE_SHA": self.sha,
+            "CURRENT_SHA": self.sha,
+            "NEW_TAG": "v1.2.3",
+            "BUMP": "patch",
+            "REASON": "fixture",
+            "GIT_CALLS": str(self.calls),
+            "API_FAIL": "0",
+            "PUSH_FAIL": "0",
+        }
+        scripts = {
+            "gh": '#!/bin/sh\n[ "$API_FAIL" = "0" ] || exit 1\n'
+                  '[ "$1" = "api" ] && [ "$2" = "repos/owner/wallet/git/ref/heads/main" ] || exit 2\n'
+                  'printf "%s\\n" "$CURRENT_SHA"\n',
+            "git": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$GIT_CALLS"\n'
+                   'if [ "$1" = "push" ] && [ "$PUSH_FAIL" = "1" ]; then exit 1; fi\n',
+        }
+        for name, content in scripts.items():
+            executable = self.root / name
+            executable.write_text(content)
+            executable.chmod(0o700)
+
+    def execute(self):
+        return subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step_script("Create tag")],
+            cwd=self.root, env=self.env, text=True, capture_output=True,
+        )
+
+    def test_unchanged_branch_creates_and_pushes_tag(self):
+        result = self.execute()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls.read_text().splitlines(), [
+            "tag -a v1.2.3 -m Release v1.2.3 (patch): fixture", "push origin v1.2.3",
+        ])
+        self.assertEqual(self.output.read_text(), "created=true\n")
+
+    def test_branch_advanced_does_not_write_tag_or_dispatch(self):
+        self.env["CURRENT_SHA"] = "b" * 40
+        self.assertEqual(self.execute().returncode, 0)
+        self.assertFalse(self.calls.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_api_failure_does_not_write_tag(self):
+        self.env["API_FAIL"] = "1"
+        self.assertNotEqual(self.execute().returncode, 0)
+        self.assertFalse(self.calls.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_failed_push_does_not_enable_release_dispatch(self):
+        self.env["PUSH_FAIL"] = "1"
+        self.assertNotEqual(self.execute().returncode, 0)
+        self.assertIn("push origin v1.2.3", self.calls.read_text())
+        self.assertFalse(self.output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

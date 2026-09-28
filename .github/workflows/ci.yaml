@@ -36,8 +36,10 @@ jobs:
         go-version: ${{ matrix.go-version }}
         cache: true
 
-    - name: Test release version selection
-      run: python3 -m unittest discover -s .github/tests -p 'test_version_bump.py' -v
+    - name: Test release automation
+      run: |
+        python3 -m unittest discover -s .github/tests -p 'test_version_bump.py' -v
+        node --test .github/tests/ci-gate.test.cjs
 
     - name: Download dependencies
       run: go mod download
