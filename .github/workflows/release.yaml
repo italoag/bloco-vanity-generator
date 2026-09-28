@@ -94,6 +94,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.version.outputs.version }}
+        target_commitish: ${{ needs.verify-ci.outputs.sha }}
         name: Release ${{ steps.version.outputs.version }}
         body: |
           ## Changes in ${{ steps.version.outputs.version }}

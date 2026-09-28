@@ -19,7 +19,7 @@ jobs:
   verify-ci:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
@@ -167,17 +167,25 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create tag
+        id: tag
         if: steps.current.outputs.skip != 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           NEW_TAG: ${{ steps.next.outputs.version }}
           BUMP: ${{ steps.next.outputs.bump }}
           REASON: ${{ steps.next.outputs.reason }}
         run: |
+          current_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$current_sha" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced before tag creation; publication skipped."
+            exit 0
+          fi
           git tag -a "$NEW_TAG" -m "Release $NEW_TAG ($BUMP): $REASON"
           git push origin "$NEW_TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
       - name: Trigger release workflow
-        if: steps.current.outputs.skip != 'true'
+        if: steps.tag.outputs.created == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_TAG: ${{ steps.next.outputs.version }}

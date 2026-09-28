@@ -16,20 +16,27 @@ async function requireSuccessfulCI(github, repo, sha, branch, expectedRunId) {
   }
   const matches = run => run.head_sha === sha && run.head_branch === branch &&
     ['push', 'workflow_dispatch'].includes(run.event) && run.workflow_id === workflow.id &&
-    run.path === CI_PATH && run.repository?.full_name?.toLowerCase() === repositoryName(repo) &&
+    [CI_PATH, `${CI_PATH}@refs/heads/${branch}`].includes(run.path) &&
+    run.repository?.full_name?.toLowerCase() === repositoryName(repo) &&
     run.head_repository?.full_name?.toLowerCase() === repositoryName(repo);
   const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
     ...repo, workflow_id: workflow.id, branch, head_sha: sha, per_page: 100,
   });
-  const latest = runs.filter(matches).sort((a, b) => b.id - a.id)[0];
-  if (!latest || (expectedRunId !== undefined && latest.id !== expectedRunId)) {
-    throw new Error(`No matching latest CI run for ${sha} on ${branch}`);
+  const candidates = runs.filter(matches).sort((a, b) => b.id - a.id);
+  const latest = candidates[0];
+  const trigger = expectedRunId === undefined ? latest : candidates.find(run => run.id === expectedRunId);
+  if (!latest || !trigger) {
+    throw new Error(`No matching CI approval for ${sha} on ${branch}`);
   }
-  const {data: current} = await github.rest.actions.getWorkflowRun({...repo, run_id: latest.id});
-  if (!matches(current) || current.id !== latest.id || current.status !== 'completed' || current.conclusion !== 'success') {
-    throw new Error(`Latest CI has not succeeded for ${sha} on ${branch}`);
+  let approved;
+  for (const id of new Set([latest.id, trigger.id])) {
+    const {data: current} = await github.rest.actions.getWorkflowRun({...repo, run_id: id});
+    if (!matches(current) || current.id !== id || current.status !== 'completed' || current.conclusion !== 'success') {
+      throw new Error(`CI approval has not succeeded for ${sha} on ${branch}`);
+    }
+    if (id === latest.id) approved = current;
   }
-  return current;
+  return approved;
 }
 
 async function resolveTag(github, repo, tag) {
@@ -59,10 +66,10 @@ async function branchTarget(github, repo, sha, branch, expectedRunId) {
 
 async function automaticTarget(github, context, branches = ['main']) {
   const run = context.payload.workflow_run;
-  if (context.eventName !== 'workflow_run' || !run || run.event !== 'push' ||
+  if (context.eventName !== 'workflow_run' || !run || !['push', 'workflow_dispatch'].includes(run.event) ||
       run.status !== 'completed' || run.conclusion !== 'success' || !branches.includes(run.head_branch) ||
       run.head_repository?.full_name?.toLowerCase() !== repositoryName(context.repo)) {
-    throw new Error('Not an approved same-repository branch push');
+    throw new Error('Not an approved same-repository branch CI completion');
   }
   return branchTarget(github, context.repo, run.head_sha, run.head_branch, run.id);
 }

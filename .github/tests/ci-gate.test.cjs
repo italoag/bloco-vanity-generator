@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const {requireSuccessfulCI, resolveTag, automaticTarget, releaseTarget, dockerTarget} = require('../ci-gate.cjs');
 
 const SHA = 'a'.repeat(40);
@@ -33,7 +34,7 @@ function fixture(options = {}) {
         getWorkflowRun: async args => {
           assert.equal(args.owner, repo.owner);
           assert.equal(args.repo, repo.repo);
-          const current = options.current ?? runs.find(item => item.id === args.run_id);
+          const current = options.currentById?.[args.run_id] ?? options.current ?? runs.find(item => item.id === args.run_id);
           assert.ok(current);
           return {data: current};
         },
@@ -136,7 +137,7 @@ test('automatic publication skips an approved commit after its branch advances',
 });
 
 for (const overrides of [
-  {event: 'pull_request'}, {event: 'workflow_dispatch'}, {conclusion: 'failure'},
+  {event: 'pull_request'}, {event: 'schedule'}, {conclusion: 'failure'},
   {status: 'queued'}, {head_branch: 'develop'}, {head_repository: {full_name: 'fork/wallet'}},
 ]) {
   test(`rejects untrusted automatic trigger: ${JSON.stringify(overrides)}`, async () => {
@@ -144,9 +145,39 @@ for (const overrides of [
   });
 }
 
-test('rejects a completed event for an older run', async () => {
-  await assert.rejects(automaticTarget(fixture({runs: [run(), run({id: 101})]}), automatic()));
+test('a newer successful manual CI does not suppress the successful push trigger', async () => {
+  const manual = run({id: 101, event: 'workflow_dispatch'});
+  const github = fixture({runs: [run(), manual]});
+  assert.equal((await automaticTarget(github, automatic())).publish, true);
+  assert.equal((await automaticTarget(github, automatic({payload: {workflow_run: manual}}))).publish, true);
 });
+
+test('the triggering approval is rechecked even when a newer run succeeds', async () => {
+  const github = fixture({runs: [run(), run({id: 101})], currentById: {100: run({conclusion: 'failure'})}});
+  await assert.rejects(automaticTarget(github, automatic()));
+  await assert.rejects(automaticTarget(fixture({runs: [run({id: 101})]}), automatic()));
+});
+
+test('newer failed or pending manual CI still blocks the successful push trigger', async () => {
+  for (const status of [{conclusion: 'failure'}, {status: 'queued', conclusion: null}]) {
+    await assert.rejects(automaticTarget(fixture({runs: [run(), run({id: 101, event: 'workflow_dispatch', ...status})]}), automatic()));
+  }
+});
+
+for (const branch of ['main', 'develop']) {
+  for (const event of ['push', 'workflow_dispatch']) {
+    test(`accepts the trusted ref-qualified CI path for ${event} on ${branch}`, async () => {
+      const candidate = run({head_branch: branch, event, path: `.github/workflows/ci.yaml@refs/heads/${branch}`});
+      await requireSuccessfulCI(fixture({runs: [candidate], branch}), repo, SHA, branch);
+    });
+  }
+}
+
+for (const suffix of ['refs/heads/develop', 'refs/pull/1/merge', 'refs/tags/v1.2.3', 'refs/heads/main/evil']) {
+  test(`rejects a CI path qualified by untrusted ref ${suffix}`, async () => {
+    await assert.rejects(requireSuccessfulCI(fixture({runs: [run({path: `.github/workflows/ci.yaml@${suffix}`})]}), repo, SHA, 'main'));
+  });
+}
 
 test('resolves lightweight and annotated version tags', async () => {
   assert.equal(await resolveTag(fixture(), repo, 'v1.2.3'), SHA);
@@ -217,7 +248,7 @@ test('versioning only follows trusted completed CI and pins checkout and commit 
   const source = workflow('version-bump.yml');
   assert.match(source, /on:\n  workflow_run:\n    workflows: \[CI\]\n    types: \[completed\]\n    branches: \[main\]/);
   const guard = job(source, 'verify-ci');
-  for (const condition of ["conclusion == 'success'", "event == 'push'", "head_branch == 'main'", 'head_repository.full_name == github.repository']) {
+  for (const condition of ["conclusion == 'success'", "event == 'push'", "event == 'workflow_dispatch'", "head_branch == 'main'", 'head_repository.full_name == github.repository']) {
     assert.ok(guard.includes(condition));
   }
   const bump = job(source, 'bump');
@@ -235,6 +266,7 @@ test('release gates creation and pins every build and metadata to the approved S
   assert.ok(create.includes('needs: verify-ci'));
   assert.ok(create.includes('ref: ${{ needs.verify-ci.outputs.sha }}'));
   assert.ok(create.includes('sha: ${{ needs.verify-ci.outputs.sha }}'));
+  assert.ok(create.includes('target_commitish: ${{ needs.verify-ci.outputs.sha }}'));
   for (const name of ['build-and-upload', 'build-and-upload-darwin-arm64-metal', 'docker-build']) {
     const build = job(source, name);
     assert.ok(build.includes('needs: create-release'));
@@ -250,17 +282,63 @@ test('Docker PRs remain build-only while every publication uses gate outputs', (
   assert.match(source, /  push:\n    tags:/);
   const guard = job(source, 'verify-ci');
   assert.ok(guard.includes("github.event_name != 'pull_request'"));
+  assert.ok(guard.includes("event == 'workflow_dispatch'"));
   const build = job(source, 'build');
   assert.ok(build.includes('needs: verify-ci'));
   assert.ok(build.includes("github.event_name == 'pull_request' || (needs.verify-ci.result == 'success' && needs.verify-ci.outputs.publish == 'true')"));
-  assert.ok(build.includes("push: ${{ needs.verify-ci.outputs.publish == 'true' }}"));
+  assert.ok(build.includes("if: steps.current.outputs.publish == 'true'"));
+  assert.ok(build.includes('push: false'));
   assert.ok(build.includes('ref: ${{ needs.verify-ci.outputs.sha || github.sha }}'));
-  assert.ok(build.includes('bloco-vgen@${{ steps.build.outputs.digest }}'));
+  assert.ok(build.includes('bloco-vgen@${{ steps.publish.outputs.digest }}'));
+  assert.ok(build.indexOf('name: Test Docker image') < build.indexOf('name: Revalidate branch before publication'));
+  assert.ok(build.indexOf('name: Revalidate branch before publication') < build.indexOf('name: Publish validated Docker image'));
+  assert.ok(job(source, 'multi-arch-test').includes("if: needs.build.outputs.published == 'true'"));
   assert.ok(job(source, 'multi-arch-test').includes('IMAGE_REF: ${{ needs.build.outputs.image }}'));
   assert.ok(job(source, 'cleanup').includes("needs.verify-ci.outputs.branch == 'main'"));
 });
 
-test('all guards run trusted-main code with read-only tokens before any publication', () => {
+function publicationScript() {
+  const block = workflow('docker.yaml').split('    - name: Revalidate branch before publication\n')[1].split('\n    - name:')[0];
+  return block.split('        script: |\n')[1].split('\n').map(line => line.slice(10)).join('\n');
+}
+
+async function publicationCheck(github, outputs, branch = 'main') {
+  return vm.runInNewContext(`(async () => { ${publicationScript()} })()`, {
+    github, context: {repo}, process: {env: {APPROVED_BRANCH: branch, APPROVED_SHA: SHA}},
+    core: {setOutput: (key, value) => { outputs[key] = value; }, notice: () => {}},
+  });
+}
+
+test('Docker revalidation blocks a branch that advances during the build', async () => {
+  const options = {};
+  const github = fixture(options);
+  assert.equal((await automaticTarget(github, automatic())).publish, true);
+  options.branchSha = OTHER_SHA;
+  const outputs = {};
+  await publicationCheck(github, outputs);
+  assert.equal(outputs.publish, false);
+});
+
+test('Docker revalidation allows an unchanged approved branch and fails closed on API error', async () => {
+  const github = fixture();
+  const outputs = {};
+  await publicationCheck(github, outputs);
+  assert.equal(outputs.publish, true);
+  github.rest.git.getRef = async () => { throw new Error('API unavailable'); };
+  const failed = {};
+  await assert.rejects(publicationCheck(github, failed), /API unavailable/);
+  assert.equal(failed.publish, undefined);
+});
+
+test('versioning revalidates main before writing a tag and dispatches only after a successful push', () => {
+  const bump = job(workflow('version-bump.yml'), 'bump');
+  assert.ok(bump.indexOf('/git/ref/heads/main') < bump.indexOf('git tag -a'));
+  assert.ok(bump.includes('[[ "$current_sha" != "$RELEASE_SHA" ]]'));
+  assert.ok(bump.includes("if: steps.tag.outputs.created == 'true'"));
+  assert.ok(bump.indexOf('git push origin') < bump.indexOf('echo "created=true"'));
+});
+
+test('all initial guards run trusted-main code with read-only tokens before publication', () => {
   for (const name of ['version-bump.yml', 'release.yaml', 'docker.yaml']) {
     const guard = job(workflow(name), 'verify-ci');
     assert.ok(guard.includes('ref: main'));
