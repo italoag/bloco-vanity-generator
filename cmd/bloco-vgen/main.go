@@ -43,6 +43,8 @@ func main() {
 	if err := fang.Execute(
 		ctx,
 		app.GetRootCommand(),
+		fang.WithVersion(Version),
+		fang.WithCommit(GitCommit),
 		fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM),
 	); err != nil {
 		handleError(err)
